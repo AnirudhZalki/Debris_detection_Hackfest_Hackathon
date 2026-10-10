@@ -183,6 +183,19 @@ class SpaceTrack:
                 continue
         return out
 
+    def gp_tles(self, norads):
+        """Latest TLEs for specific NORAD ids (used to make sure every CDM object is screened)."""
+        out = []
+        ids = sorted({int(n) for n in norads})
+        for k in range(0, len(ids), 150):
+            chunk = ",".join(map(str, ids[k:k + 150]))
+            q = f"class/gp/NORAD_CAT_ID/{chunk}/orderby/NORAD_CAT_ID%20asc/format/3le"
+            try:
+                out += parse_tle_text(self.query(q, f"spacetrack_gp_{k}_{len(ids)}.tle", 3), "space-track")
+            except Exception as e:
+                log.warning("Space-Track gp query failed: %s", e)
+        return out
+
     def cdm_history(self, days=30, limit=20000):
         """All public CDMs created in the last ``days`` (several versions per encounter)."""
         since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")

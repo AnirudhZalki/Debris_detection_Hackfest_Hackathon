@@ -26,6 +26,10 @@ def encounter_plane(dr, dv):
 def pc_foster(dr, dv, C, hbr_km):
     """dr, dv: relative position/velocity (km, km/s) at TCA; C: combined 3x3 cov (km^2)."""
     dr = np.asarray(dr, float); dv = np.asarray(dv, float)
+    if not np.all(np.isfinite(dr)) or not np.all(np.isfinite(C)) or np.linalg.norm(dv) < 1e-6:
+        # co-moving objects have no defined encounter plane: not a short-term conjunction
+        return 0.0, {"miss_2d_km": [float(np.linalg.norm(dr)) if np.all(np.isfinite(dr)) else 0.0, 0.0],
+                     "sigma_major_km": 0.0, "sigma_minor_km": 0.0}
     Bm = encounter_plane(dr, dv)
     m = Bm @ dr
     P = Bm @ C @ Bm.T

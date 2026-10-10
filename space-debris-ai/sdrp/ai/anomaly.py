@@ -52,9 +52,31 @@ def _per_object_z(F):
     return (F - med) / np.maximum(mad, _FLOORS)
 
 
+def reference_labels(hist, da_km=1.5, di_deg=0.02):
+    """Independent rule-based reference for live data, where no ground truth exists.
+
+    Flags a TLE transition when the semi-major axis steps by more than ``da_km`` against the
+    object's own median step (net of normal decay), or the inclination jumps by more than
+    ``di_deg`` -- fixed physical thresholds, unrelated to the ML detector's z-scores."""
+    sats = hist["satrecs"]
+    a = np.array([(MU / (s.no_kozai / 60) ** 2) ** (1 / 3) for s in sats])
+    inc = np.array([s.inclo for s in sats])
+    da = np.diff(a)
+    base = np.median(da) if len(da) else 0.0
+    lab = [0]
+    for k in range(len(da)):
+        hit = abs(da[k] - base) > da_km or abs(math.degrees(inc[k + 1] - inc[k])) > di_deg
+        lab.append(1 if hit else 0)
+    return lab
+
+
 def detect(histories, contamination=0.02, seed=0, z_gate=6.0):
     zs, raw, meta = [], [], []
+    label_source = "ground truth"
     for h in histories:
+        if not h.get("labels"):
+            h["labels"] = reference_labels(h)
+            label_source = "rule-based reference"
         if len(h["satrecs"]) < 8:
             continue
         F = _transition_features(h)
@@ -116,12 +138,15 @@ def detect(histories, contamination=0.02, seed=0, z_gate=6.0):
     labels = np.array([m[3] for m in meta])
     actionable = [e for e in events if e["category"] in ("maneuver", "fragmentation", "other")]
     metrics = {"transitions": int(len(X)), "detections": len(actionable),
-               "drag_or_storm_flags": len(events) - len(actionable), "objects": len(zs)}
+               "drag_or_storm_flags": len(events) - len(actionable), "objects": len(zs),
+               "label_source": label_source}
     if labels.any():
         # event-level scoring: a detection within 0..2 days after a true event is a hit
         truth = [(m[0], m[2]) for m, l in zip(meta, labels) if l > 0]
         hit = set(); fp = 0
-        for e in actionable:
+        # a maneuver reference can only confirm maneuver detections
+        scored = actionable if label_source == "ground truth" else [e for e in actionable if e["category"] == "maneuver"]
+        for e in scored:
             ep = datetime.fromisoformat(e["epoch"])
             match = [t for t in truth if t[0] == e["norad"] and 0 <= (ep - t[1]).days <= 2]
             if match:

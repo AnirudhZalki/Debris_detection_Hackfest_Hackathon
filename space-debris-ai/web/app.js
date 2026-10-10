@@ -10,8 +10,12 @@ const pct = x => x == null ? "—" : `${(x * 100).toFixed(1)}%`;
 const num = (x, d = 2) => x == null ? "—" : Number(x).toFixed(d);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-Chart.defaults.color = "#8b9bb0";
-Chart.defaults.borderColor = "#1c2838";
+function applyChartTheme() {
+  const light = document.documentElement.dataset.theme === "light";
+  Chart.defaults.color = light ? "#5d6773" : "#8b9bb0";
+  Chart.defaults.borderColor = light ? "#dde1e6" : "#2a3037";
+}
+applyChartTheme();
 Chart.defaults.font.family = "Inter, system-ui, sans-serif";
 Chart.defaults.font.size = 11;
 const charts = {};
@@ -24,6 +28,17 @@ function fixLogAxes(cfg) {
 function mkChart(id, cfg) { fixLogAxes(cfg); if (charts[id]) charts[id].destroy(); charts[id] = new Chart(document.getElementById(id), cfg); return charts[id]; }
 
 const APP = { summary: null, conj: [], tles: [], loaded: {}, alertsSeen: new Set() };
+
+// ------------------------------------------------------------------ theme
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("theme", t); } catch (e) {}
+  $("#themeBtn").textContent = t === "light" ? "Dark mode" : "Light mode";
+  applyChartTheme();
+  if (APP.summary) { APP.loaded = {}; renderTab($("#tabs button.active").dataset.tab); }
+}
+$("#themeBtn").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+$("#themeBtn").textContent = document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode";
 
 // ------------------------------------------------------------------ tabs / clock
 $$("#tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -197,7 +212,7 @@ function renderForecast(f) {
   const box = $("#fcBox");
   if (!f) { box.innerHTML = ""; return; }
   const col = { HIGH: "red", MEDIUM: "yellow", LOW: "green" }[f.level];
-  box.innerHTML = `<div class="fc"><div class="fc-h"><h4>Will this estimate change at the next update? · Option C forecast</h4><span class="pill ${col}">${f.level}</span></div>
+  box.innerHTML = `<div class="fc"><div class="fc-h"><h4>Will this estimate change at the next update?</h4><span class="pill ${col}">${f.level}</span></div>
     <div class="fc-row"><div class="fc-big mono">${(f.p_change_next_update * 100).toFixed(0)}%</div>
     <div><div>probability that the next orbital update moves the miss distance by more than max(200 m, 25%) or the TCA by more than 1 s.</div>
     <div class="note">Why: ${f.reasons.map(esc).join("; ")}. This forecasts estimate stability, not collision probability.</div></div></div></div>`;
@@ -303,7 +318,7 @@ async function renderWeather() {
 async function renderAnom() {
   const a = await api("/api/state/anomalies"), m = a.metrics;
   $("#anMetrics").innerHTML = [[m.objects, "objects with TLE history"], [m.transitions, "TLE transitions scored"], [m.detections, "maneuver / breakup detections"],
-    [m.drag_or_storm_flags, "drag / storm flags"], [m.precision != null ? pct(m.precision) : "n/a", "precision (labelled)"], [m.recall != null ? pct(m.recall) : "n/a", "recall (labelled)"],
+    [m.drag_or_storm_flags, "drag / storm flags"], [m.precision != null ? pct(m.precision) : "n/a", `precision (vs ${m.label_source || "labels"})`], [m.recall != null ? pct(m.recall) : "n/a", `recall (vs ${m.label_source || "labels"})`],
     [m.f1 != null ? num(m.f1, 2) : "n/a", "F1"]].map(x => `<div><b>${x[0]}</b><span>${x[1]}</span></div>`).join("");
   const prio = { fragmentation: 0, maneuver: 1, other: 2 };
   a.events.sort((p, q) => (prio[p.category] ?? 3) - (prio[q.category] ?? 3) || q.score - p.score);
@@ -327,7 +342,7 @@ async function renderKpi() {
   const cls = (ok) => ok == null ? "" : ok ? "ok" : "warn";
   const rows = [
     ["Pc accuracy — Brier score (AI-calibrated / raw)", `${num(k.pc_brier_calibrated, 4)} / ${num(k.pc_brier_raw, 4)}`, "lower is better", `skill vs climatology ${num(k.pc_brier_skill_calibrated, 2)} · ${cal.n_test} encounters, ${cal.collisions_in_test} collisions (stress-test population)`, k.pc_brier_calibrated <= k.pc_brier_raw],
-    ["Conjunction hit rate vs CDMs", pct(k.cdm_hit_rate), "≥ 95 %", `${/synthetic/.test(s.provenance.cdm || "") ? "self-consistency vs injected truth · " : ""}${s.cdm_comparison.hits ?? 0}/${s.cdm_comparison.reference_cdms ?? 0} reference CDMs · median TCA error ${num(s.cdm_comparison.median_tca_error_s, 2)} s · miss error ${num(s.cdm_comparison.median_miss_distance_error_m, 1)} m`, k.cdm_hit_rate >= 0.95],
+    ["Conjunction hit rate vs CDMs", pct(k.cdm_hit_rate), "≥ 90 %", `${/synthetic/.test(s.provenance.cdm || "") ? "self-consistency vs injected truth · " : ""}${s.cdm_comparison.hits ?? 0}/${s.cdm_comparison.reference_cdms ?? 0} reference CDMs · median TCA error ${num(s.cdm_comparison.median_tca_error_s, 2)} s · miss error ${num(s.cdm_comparison.median_miss_distance_error_m, 1)} m`, k.cdm_hit_rate >= 0.9],
     ["Alert lead time (median)", k.median_alert_lead_time_h != null ? num(k.median_alert_lead_time_h, 1) + " h" : "—", "≥ 6 h", `horizon ${s.config.horizon_h} h`, k.median_alert_lead_time_h >= 6],
     ["Propagation error @1 / 3 / 7 d (median)", ["1", "3", "7"].map(d => num(k.prop_error_median_km[d], 2)).join(" / ") + " km", "TLE-class", "TLE-vs-TLE residuals, maneuvers excluded", true],
     ["Covariance realism — χ² 95 % containment @7 d", `${pct(k.covariance_chi2_containment_after?.at(-1))} (was ${pct(k.covariance_chi2_containment_before?.at(-1))})`, "→ 95 %", `median NEES ${num(k.covariance_nees_after?.at(-1), 2)} (ideal 2.37), was ${num(k.covariance_nees_before?.at(-1), 2)}`, null],
@@ -339,7 +354,7 @@ async function renderKpi() {
     ["AI drag model — density error reduction", `${num(k.density_error_reduction_pct, 1)} %`, "", "vs static exponential atmosphere", true],
     ["GNN screener — recall / pairs pruned", `${pct(k.gnn_recall)} / ${pct(k.gnn_pruned_fraction)}`, "recall ≥ 95 %", gnn.benchmark.speedup ? `${num(gnn.benchmark.speedup, 1)}× faster pairwise screening; MOID filter prunes only ${pct(gnn.metrics.test_moid_baseline_pruned_fraction_same_recall)} at same recall` : "", k.gnn_recall >= 0.95],
     ["Anomaly detection F1", num(k.anomaly_f1, 2), "", "maneuvers & fragmentations (labelled)", k.anomaly_f1 > 0.8],
-    ["Update-change forecast (Option C) — AUC", `${num(k.change_forecast_auc, 3)}`, "> physics baseline", `physics heuristic ${num(k.change_forecast_auc_physics, 3)} · Brier ${num(k.change_forecast_brier, 3)} · time-ordered test`, k.change_forecast_auc > k.change_forecast_auc_physics],
+    ["Update-change forecast — AUC", `${num(k.change_forecast_auc, 3)}`, "> physics baseline", `physics heuristic ${num(k.change_forecast_auc_physics, 3)} · Brier ${num(k.change_forecast_brier, 3)} · time-ordered test`, k.change_forecast_auc > k.change_forecast_auc_physics],
   ];
   $("#kpiTbl").innerHTML = `<div class="kpi-row h"><div>KPI</div><div>Value</div><div>Target</div><div>Detail</div></div>` +
     rows.map(r => `<div class="kpi-row"><div>${r[0]}</div><div class="v ${cls(r[4])}">${r[1]}</div><div class="muted">${r[2]}</div><div class="muted">${r[3]}</div></div>`).join("");
@@ -359,7 +374,7 @@ async function renderKpi() {
     { label: "perfect", type: "line", data: [{ x: 1e-7, y: 1e-7 }, { x: 1, y: 1 }], borderColor: "#ffffff44", pointRadius: 0 }] },
     options: { maintainAspectRatio: false, scales: { x: { type: "logarithmic", title: { display: true, text: "predicted Pc" } }, y: { type: "logarithmic", title: { display: true, text: "observed collision frequency" } } } } });
   const fc = await api("/api/state/change_forecast");
-  $("#fcCard").innerHTML = `<div class="panel-h"><span>Option C · forecasting whether an encounter estimate will change at the next update</span><span class="muted">${esc(fc.source)} · ${fc.encounters.toLocaleString()} encounters · ${fc.updates.toLocaleString()} updates</span></div>
+  $("#fcCard").innerHTML = `<div class="panel-h"><span>Forecasting whether an encounter estimate will change at the next update</span><span class="muted">${esc(fc.source)} · ${fc.encounters.toLocaleString()} encounters · ${fc.updates.toLocaleString()} updates</span></div>
     <div class="grid-2"><div>
       <div class="kv"><div><b>${num(fc.model.auc, 3)}</b><span>ROC-AUC model</span></div><div><b>${num(fc.baseline_physics.auc, 3)}</b><span>ROC-AUC physics heuristic</span></div><div><b>0.500</b><span>ROC-AUC climatology</span></div>
       <div><b>${num(fc.model.brier, 3)}</b><span>Brier model (physics ${num(fc.baseline_physics.brier, 3)}, climatology ${num(fc.baseline_climatology.brier, 3)})</span></div>

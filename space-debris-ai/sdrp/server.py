@@ -210,13 +210,13 @@ def conjunction(cid: int, target_pc: float = Query(None)):
         _, r1, _ = a.sat.sgp4(jd, fr); _, r2, _ = b.sat.sgp4(jd, fr)
         rng_km.append(float(np.linalg.norm(np.subtract(r2, r1))))
     man = S.state["maneuvers"].get(str(cid))
-    if (man is None or target_pc is not None) and c["maneuverable"] and c["pc"] > 1e-7:
+    if (man is None or target_pc is not None) and c["maneuverable"] and (c["pc"] or 0) > 1e-7:
         from .ops.maneuver import recommend
         ev = dict(e)
         if e.get("swap"):
             ev.update({"r1": e["r2"], "v1": e["v2"], "r2": e["r1"], "v2": e["v1"]})
         man = recommend(ev, C, hbr, datetime.now(timezone.utc),
-                        target_pc=target_pc or min(config.PC_RED / 10, c["pc"] / 10))
+                        target_pc=target_pc or min(config.PC_RED / 10, (c["pc"] or 1e-6) / 10))
     return {"conjunction": c, "pc_vs_hbr": pc_vs_hbr, "pc_vs_cov_scale": pc_vs_scale,
             "encounter_plane": plane, "range_timeline": {"t_s": ts.tolist(), "range_km": rng_km},
             "maneuver": man,

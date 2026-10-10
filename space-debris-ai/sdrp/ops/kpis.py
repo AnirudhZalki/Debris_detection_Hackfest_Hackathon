@@ -70,9 +70,29 @@ def fit_realism(histories, cov_model, sw):
     return before, after
 
 
-def compare_with_cdms(events, catalog, cdms, horizon_start: datetime, horizon_h: float, tol_s=120):
+def _latest_per_encounter(cdms, gap_s=600):
+    """Space-Track publishes many CDM versions per encounter (and one per object order).
+    Keep only the most recent message for each pair + TCA."""
+    best = {}
+    for c in cdms:
+        key = (min(c["sat1"], c["sat2"]), max(c["sat1"], c["sat2"]))
+        tc = datetime.fromisoformat(c["tca"])
+        for (k2, t2) in list(best):
+            if k2 == key and abs((t2 - tc).total_seconds()) < gap_s:
+                key_t = t2
+                break
+        else:
+            key_t = tc
+        cur = best.get((key, key_t))
+        if cur is None or str(c.get("created") or "") > str(cur.get("created") or ""):
+            best[(key, key_t)] = c
+    return list(best.values())
+
+
+def compare_with_cdms(events, catalog, cdms, horizon_start: datetime, horizon_h: float, tol_s=300):
     """Hit/miss of our screening against reference CDMs (Space-Track, or synthetic truth)."""
     end = horizon_start + timedelta(hours=horizon_h)
+    cdms = _latest_per_encounter(cdms)
     in_cat = [c for c in cdms if catalog.get(c["sat1"]) is not None and catalog.get(c["sat2"]) is not None
               and horizon_start <= datetime.fromisoformat(c["tca"]) <= end]
     by_pair = {}

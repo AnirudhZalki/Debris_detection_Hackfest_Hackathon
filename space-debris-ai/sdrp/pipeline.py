@@ -56,6 +56,8 @@ class Progress:
 # ----------------------------------------------------------------------------- data
 def load_data(now, mode, prog):
     prov = {"mode": mode}
+    st = sources.SpaceTrack()
+    cdms = []
     objs, injected = [], []
     if mode != "offline":
         try:
@@ -64,6 +66,7 @@ def load_data(now, mode, prog):
             log.warning("CelesTrak unavailable: %s", e)
         if len(objs) >= 100:
             prov["catalog"] = "CelesTrak GP (live)"
+            sc = {}
             try:
                 sc = sources.fetch_satcat()
                 for o in objs:
@@ -78,6 +81,21 @@ def load_data(now, mode, prog):
             objs = list(uniq.values())
             if len(objs) > config.MAX_OBJECTS:
                 objs = _stratified_cap(objs, config.MAX_OBJECTS, config.RANDOM_SEED)
+            # make sure every object named in a live CDM is in the screened catalog
+            if st.enabled:
+                try:
+                    cdms = st.cdms()
+                    have = {o.norad for o in objs}
+                    need = {c[k] for c in cdms for k in ("sat1", "sat2")} - have
+                    extra = [o for o in st.gp_tles(need) if not o.sat.error]
+                    for o in extra:
+                        m = sc.get(o.norad) if sc else None
+                        if m:
+                            o.obj_type, o.rcs_m2, o.country = m["type"], m["rcs"], m["country"]
+                    objs += extra
+                    prov["cdm"] = f"Space-Track cdm_public ({len(cdms)} messages)"
+                except Exception as e:
+                    log.warning("Space-Track CDMs failed: %s", e)
             if config.DISCOS_TOKEN:
                 d = sources.fetch_discos([o.norad for o in objs])
                 for o in objs:
@@ -107,14 +125,7 @@ def load_data(now, mode, prog):
         sw = synthetic.synthetic_space_weather(now - timedelta(days=5 * 365), now + timedelta(days=60))
         prov["space_weather"] = "synthetic solar-cycle series (offline)"
 
-    st = sources.SpaceTrack()
-    cdms, histories = [], []
-    if mode != "offline" and st.enabled:
-        try:
-            cdms = st.cdms()
-            prov["cdm"] = f"Space-Track cdm_public ({len(cdms)})"
-        except Exception as e:
-            log.warning("Space-Track CDMs failed: %s", e)
+    histories = []
     return objs, injected, sw, sw_now, cdms, histories, prov, st
 
 
@@ -231,6 +242,7 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
     prog.lap("screening")
 
     # ---- Pc for every event
+    events = [e for e in events if e["rel_speed_kms"] > 1e-3]   # drop co-moving pairs
     prog.step(f"computing Pc for {len(events)} conjunctions", 50)
     out_events = []
     for k, e in enumerate(events):
@@ -327,13 +339,18 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
             seqs = sequences_from_cdm_history(st.cdm_history())
         except Exception as ex:
             log.warning("CDM history unavailable: %s", ex)
+    fc = None
     if len(seqs) >= 300:
-        prov["update_history"] = f"Space-Track cdm_public history ({len(seqs)} encounters)"
-    else:
+        try:
+            fc = ChangeForecaster(seed=config.RANDOM_SEED).fit_evaluate(seqs)
+            prov["update_history"] = f"Space-Track cdm_public history ({len(seqs)} encounters)"
+        except Exception as ex:
+            log.warning("forecaster on real CDM history failed (%s); using simulated sequences", ex)
+    if fc is None:
         seqs = simulate_sequences(n_enc=4000, start=now - timedelta(days=400), days=390,
                                   seed=config.RANDOM_SEED, sw_series=sw)
         prov["update_history"] = "simulated orbit-determination update sequences (physics-based)"
-    fc = ChangeForecaster(seed=config.RANDOM_SEED).fit_evaluate(seqs)
+        fc = ChangeForecaster(seed=config.RANDOM_SEED).fit_evaluate(seqs)
     for oe, e in zip(out_events, events):
         a, b = catalog.objects[e["i"]], catalog.objects[e["j"]]
         sec = a if e["swap"] else b
