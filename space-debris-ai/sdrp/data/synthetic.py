@@ -30,9 +30,28 @@ def make_satrec(norad, epoch: datetime, n_rad_min, ecc, inc, raan, argp, M, bsta
     return s
 
 
+def _tle_checksum(line):
+    return sum(int(c) if c.isdigit() else 1 if c == "-" else 0 for c in line[:68]) % 10
+
+
+def _with_launch_year(l1, years, norad):
+    """Write a launch year into the international designator (TLE line 1, columns 10-17).
+
+    The year is drawn from ``years=(first, last)`` with a generator seeded by the NORAD id, so the
+    catalog's orbits (and the main random stream) are unchanged.
+    """
+    r = np.random.default_rng(int(norad))
+    yy = int(r.integers(years[0], years[1] + 1)) % 100
+    des = f"{yy:02d}{int(r.integers(1, 200)):03d}A  "
+    l1 = l1[:9] + des + l1[17:68]
+    return l1 + str(_tle_checksum(l1))
+
+
 def satrec_to_object(s, name, obj_type="DEBRIS", rcs=None, mass=None, area=None,
-                     country="", source="synthetic"):
+                     country="", source="synthetic", launch_years=None):
     l1, l2 = export_tle(s)
+    if launch_years:
+        l1 = _with_launch_year(l1, launch_years, s.satnum)
     return SpaceObject(norad=int(s.satnum), name=name, line1=l1, line2=l2, obj_type=obj_type,
                        rcs_m2=rcs, mass_kg=mass, area_m2=area, country=country, source=source)
 
@@ -139,7 +158,7 @@ def fit_tle_to_state(norad, epoch: datetime, t_target: datetime, r_t, v_t, bstar
 # ----------------------------------------------------------------------------- populations
 def _shell(rng, norad0, name, n_planes, per_plane, alt, inc, epoch, obj_type="PAYLOAD",
            rcs=10.0, mass=300.0, area=12.0, bstar=1.5e-4, raan0=0.0, phase=1, alt_jit=0.0,
-           raan_span=360.0):
+           raan_span=360.0, launch_years=None):
     out = []
     k = 0
     for p in range(n_planes):
@@ -151,7 +170,7 @@ def _shell(rng, norad0, name, n_planes, per_plane, alt, inc, epoch, obj_type="PA
             s = make_satrec(norad0 + k, epoch, alt_to_n(h), 1e-4 + abs(rng.normal(0, 1e-4)),
                             math.radians(inc), raan, argp, M - argp,
                             bstar * rng.lognormal(0, 0.3))
-            out.append(satrec_to_object(s, f"{name}-{k + 1:04d}", obj_type, rcs, mass, area))
+            out.append(satrec_to_object(s, f"{name}-{k + 1:04d}", obj_type, rcs, mass, area, launch_years=launch_years))
             k += 1
     return out
 
@@ -183,15 +202,15 @@ def build_catalog(now: datetime, seed=42, scale=1.0, n_injected=14):
     sz = lambda x: max(1, int(round(x * scale)))
     objs: list[SpaceObject] = []
     objs += _shell(rng, 70000, "STARLINK-SYN", sz(24), 22, 550, 53.0, ep, rcs=12, mass=800,
-                   area=30, bstar=2.0e-4, phase=11)
+                   area=30, bstar=2.0e-4, phase=11, launch_years=(2020, 2026))
     objs += _shell(rng, 71000, "STARLINK-SYN-B", sz(12), 20, 560, 97.6, ep, rcs=12, mass=800,
-                   area=30, bstar=2.0e-4, phase=3, raan0=17)
+                   area=30, bstar=2.0e-4, phase=3, raan0=17, launch_years=(2021, 2026))
     objs += _shell(rng, 72000, "ONEWEB-SYN", sz(12), 16, 1200, 87.9, ep, rcs=6, mass=150,
-                   area=6, bstar=1e-5, phase=1)
+                   area=6, bstar=1e-5, phase=1, launch_years=(2019, 2023))
     objs += _shell(rng, 73000, "IRIDIUM-NEXT-SYN", 6, 11, 780, 86.4, ep, rcs=8, mass=860,
-                   area=12, bstar=3e-5, phase=2, raan0=5, raan_span=180.0)
+                   area=12, bstar=3e-5, phase=2, raan0=5, raan_span=180.0, launch_years=(2017, 2019))
     objs += _shell(rng, 73500, "GPS-SYN", 6, 5, 20180, 55.0, ep, rcs=20, mass=2000,
-                   area=20, bstar=0.0, phase=1)
+                   area=20, bstar=0.0, phase=1, launch_years=(2004, 2024))
     # sun-synchronous EO payloads, random planes
     for k in range(sz(220)):
         h = rng.uniform(480, 830)
@@ -200,7 +219,8 @@ def build_catalog(now: datetime, seed=42, scale=1.0, n_injected=14):
                         rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi),
                         rng.uniform(0, 2 * math.pi), 6e-5 * rng.lognormal(0, 0.5))
         objs.append(satrec_to_object(s, f"EO-SAT-SYN {k + 1:03d}", "PAYLOAD",
-                                     rcs=float(rng.uniform(0.5, 6)), mass=float(rng.uniform(50, 1500))))
+                                     rcs=float(rng.uniform(0.5, 6)), mass=float(rng.uniform(50, 1500)),
+                                     launch_years=(2012, 2025)))
     # rocket bodies (LEO and GTO)
     for k in range(sz(140)):
         h = rng.uniform(600, 1000); inc = float(rng.choice([71.0, 74.0, 82.9, 98.5, 51.6]))
@@ -224,7 +244,7 @@ def build_catalog(now: datetime, seed=42, scale=1.0, n_injected=14):
                         abs(rng.normal(2e-4, 1e-4)), math.radians(abs(rng.normal(0.05, 1.5))),
                         rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi),
                         rng.uniform(0, 2 * math.pi), 0.0)
-        objs.append(satrec_to_object(s, f"GEO-SAT-SYN {k + 1:03d}", "PAYLOAD", rcs=25, mass=4000))
+        objs.append(satrec_to_object(s, f"GEO-SAT-SYN {k + 1:03d}", "PAYLOAD", rcs=25, mass=4000, launch_years=(2000, 2024)))
     # historical fragmentation clouds (orbit families approximating the real clouds)
     objs += _cloud(rng, 80000, "FENGYUN 1C", sz(420), 850, 98.7, ep, 120, 0.03, 110, 25, 1.2e-4)
     objs += _cloud(rng, 81000, "COSMOS 2251", sz(260), 780, 74.0, ep, 90, 0.02, 200, 20, 1.5e-4)

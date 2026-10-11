@@ -133,9 +133,35 @@ canvas.plane{width:100%;height:260px;background:var(--inset);border:1px solid va
 .provbox{border-bottom:1px solid var(--line);font-size:11.5px}
 .provbox summary{cursor:pointer;padding:5px 18px;color:var(--mut);list-style:none;user-select:none}
 .provbox summary::-webkit-details-marker{display:none}
-.provbox summary::before{content:"B8";display:inline-block;margin-right:6px}
-.provbox[open] summary::before{content:"BE"}
+.provbox summary::before{content:"\25B8";display:inline-block;margin-right:6px}
+.provbox[open] summary::before{content:"\25BE"}
 .provbox summary .syn{color:#e8c56a}.provbox summary .live{color:#7ee2b4}
 .provbox .prov{border-bottom:0;padding-top:2px}
 :root[data-theme="light"] .provbox summary .syn{color:#8a5a00}
 :root[data-theme="light"] .provbox summary .live{color:#1a7f4b}
+
+.alts{margin:4px 0 8px 18px;padding:0;font-size:12.5px;color:var(--mut)}.alts li{margin:3px 0}.alts b{color:var(--tx)}
+
+/* life cycle + fuel */
+.banner{border:1px solid var(--line2);border-left:4px solid var(--yel);background:var(--bg2);border-radius:6px;padding:9px 12px;margin-bottom:10px;font-size:13px}
+.banner.red{border-left-color:var(--red)}.banner.green{border-left-color:var(--grn)}
+.banner b{color:var(--tx)}
+.stages{display:flex;flex-wrap:wrap;margin:6px 0 12px}
+.stages>div{flex:1 1 150px;background:var(--bg2);border:1px solid var(--line);padding:9px 11px}
+.stages b{display:block;font-size:13px}
+.stages span{font-size:11.5px;color:var(--mut)}
+.stages .dead{border-top:3px solid var(--red)}.stages .live{border-top:3px solid var(--grn)}.stages .mid{border-top:3px solid var(--yel)}
+details.more{border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:12px}
+details.more>summary{cursor:pointer;padding:10px 12px;font:600 14px var(--sans);list-style:none;user-select:none}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary::before{content:"\25B8";display:inline-block;margin-right:8px;color:var(--mut)}
+details.more[open]>summary::before{content:"\25BE"}
+details.more>.inner{padding:0 12px 4px}
+.explain{font-size:13px;line-height:1.55}
+.explain p{margin:0 0 8px}
+
+.fbar{display:flex;height:18px;border-radius:9px;overflow:hidden;background:var(--inset);border:1px solid var(--line);margin:6px 0 2px}
+.fbar i{display:block;height:100%}
+.f-used{background:#7f8ea3}.f-man{background:var(--yel)}.f-left{background:var(--grn)}.f-res{background:var(--blue)}
+.fkey{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--mut);margin-bottom:8px}
+.fkey i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}

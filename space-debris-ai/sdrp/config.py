@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # optional .env file (KEY=VALUE per line) for credentials such as SPACETRACK_USER
 _envf = ROOT / ".env"
 if _envf.exists():
-    for _line in _envf.read_text().splitlines():
+    for _line in _envf.read_text(encoding="utf-8-sig").splitlines():
         if "=" in _line and not _line.strip().startswith("#"):
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
@@ -33,13 +33,16 @@ def _env(name, default, cast=str):
 # "auto"  -> try live downloads (CelesTrak, NOAA, Space-Track, DISCOS), fall back to offline data
 # "live"  -> live only (errors if offline)
 # "offline" -> bundled/synthetic data only (always works, fully reproducible)
-DATA_MODE = _env("SDRP_DATA_MODE", "auto")
+DATA_MODE = _env("SDRP_DATA_MODE", "auto").strip().lower()
+if DATA_MODE not in ("auto", "live", "offline"):
+    print(f"[config] unknown SDRP_DATA_MODE '{DATA_MODE}' - using 'auto'")
+    DATA_MODE = "auto"
 
 # CelesTrak GP groups to pull in live mode (comma separated).
 CELESTRAK_GROUPS = _env(
     "SDRP_CELESTRAK_GROUPS",
     "stations,starlink,oneweb,iridium-NEXT,cosmos-2251-debris,iridium-33-debris,"
-    "fengyun-1c-debris,cosmos-1408-debris,last-30-days,weather,gps-ops",
+    "fengyun-1c-debris,cosmos-1408-debris,weather,gps-ops",
 )
 MAX_OBJECTS = _env("SDRP_MAX_OBJECTS", 3000, int)        # cap for laptop-friendly runs
 
@@ -58,6 +61,7 @@ HARD_BODY_RADIUS_M = _env("SDRP_HBR_M", 20.0, float)     # default combined hard
 PC_RED = _env("SDRP_PC_RED", 1e-4, float)                # maneuver threshold (NASA CARA red)
 PC_YELLOW = _env("SDRP_PC_YELLOW", 1e-5, float)
 # miss-distance risk tiers (km): HIGH <= 0.5, MEDIUM <= 2, LOW <= 4, anything farther is not classed
+FAR_TARGET = _env("SDRP_FAR_TARGET", 0.20, float)           # max false-alert rate when tuning the alert threshold
 MISS_HIGH_KM = _env("SDRP_MISS_HIGH_KM", 0.5, float)
 MISS_MEDIUM_KM = _env("SDRP_MISS_MEDIUM_KM", 2.0, float)
 MISS_LOW_KM = _env("SDRP_MISS_LOW_KM", 4.0, float)

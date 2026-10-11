@@ -57,6 +57,7 @@ def propagation_errors(histories, cov_model=None, sw=None, max_objects=120):
                                       for h in HORIZONS_D]
         allr = np.vstack([np.array(comp_ratio[h]) for h in HORIZONS_D if comp_ratio[h]])
         out["realism_scale_ric"] = np.sqrt(np.median(allr, 0) / 0.455).tolist()   # median chi2(1)=0.455
+        out["nees_q95"] = [float(np.percentile(nees[h], 95)) if nees[h] else None for h in HORIZONS_D]
     return out
 
 
@@ -67,6 +68,17 @@ def fit_realism(histories, cov_model, sw):
     cov_model.realism = {"R": float(np.clip(k[0], 0.2, 20)), "I": float(np.clip(k[1], 0.2, 20)),
                          "C": float(np.clip(k[2], 0.2, 20))}
     after = propagation_errors(histories, cov_model, sw)
+    # The median fit leaves heavy tails outside the chi-square bound (TLE errors are not Gaussian).
+    # Widen all axes until the 95th-percentile NEES of the worst horizon sits at the chi2(3) 95 % point.
+    for _ in range(3):
+        q = [x for x in after.get("nees_q95", []) if x]
+        if not q:
+            break
+        g = float(np.sqrt(max(q) / 7.815))
+        if abs(g - 1) < 0.03:
+            break
+        cov_model.realism = {a: float(np.clip(v * g, 0.2, 60)) for a, v in cov_model.realism.items()}
+        after = propagation_errors(histories, cov_model, sw)
     return before, after
 
 

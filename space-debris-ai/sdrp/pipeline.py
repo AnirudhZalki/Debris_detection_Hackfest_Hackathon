@@ -22,7 +22,6 @@ from .ai.density import DensityModel
 from .ai.explain import explain, typical_values
 from .ai.forecast import ChangeForecaster, drag_sensitivity, sequences_from_cdm_history, simulate_sequences
 from .ai.gnn_screen import GNNScreener
-from .ai import triage as triage_mod
 from .ai.reentry import reentry_watchlist
 from .astro.covariance import CovarianceModel
 from .astro.pc import pc_foster, pc_max
@@ -30,6 +29,7 @@ from .astro.propagate import Catalog, SpaceObject, ecef_to_geodetic, teme_to_ece
 from .astro.screening import apogee_perigee_pairs, screen, screen_pairs, screen_subset
 from .data import sources, synthetic
 from .ops.kpis import compare_with_cdms, fit_realism
+from .ops.lifecycle import fleet as lifecycle_fleet, lifecycle
 from .ops.maneuver import recommend
 
 log = logging.getLogger("sdrp.pipeline")
@@ -234,7 +234,8 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
     prog.step("Pc calibration study (Brier score)", 24)
     k_scale = float(np.exp(np.mean(np.log(prop_before.get("realism_scale_ric", [1, 1, 1])))))
     k_scale = float(np.clip(k_scale, 0.3, 5))
-    calib, iso = run_study(realism_scale=k_scale, n=10000, seed=config.RANDOM_SEED, red=config.PC_RED)
+    calib, iso = run_study(realism_scale=k_scale, n=10000, seed=config.RANDOM_SEED, red=config.PC_RED,
+                           far_target=config.FAR_TARGET)
     prog.lap("pc_calibration")
 
     # ---- screening
@@ -269,6 +270,7 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         # primary = the maneuverable / larger object
         swap = (b.obj_type == "PAYLOAD" and a.obj_type != "PAYLOAD")
         p, s_ = (b, a) if swap else (a, b)
+        lc_p = lifecycle(p, now)
         e.update({"C": C, "pc_scale": float(pscale), "hbr_km": hbr, "swap": swap, "age_a": age_a, "age_b": age_b, "swd": swd})
         out_events.append({
             "id": k, "primary": p.norad, "primary_name": p.name, "primary_type": p.obj_type,
@@ -281,7 +283,8 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
             "sigma_major_km": info["sigma_major_km"], "sigma_minor_km": info["sigma_minor_km"],
             "miss_2d_km": info["miss_2d_km"],
             "tca_lat": float(lat), "tca_lon": float(lon), "tca_alt_km": float(alt),
-            "maneuverable": p.obj_type == "PAYLOAD",
+            "maneuverable": lc_p["maneuverable"],
+            "primary_lifecycle": lc_p,
             "age_days": max(abs(age_a), abs(age_b)),
         })
     order = sorted(range(len(out_events)), key=lambda i: -out_events[i]["pc"])
@@ -300,10 +303,48 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         ev = dict(e)
         if e["swap"]:
             ev.update({"r1": e["r2"], "v1": e["v2"], "r2": e["r1"], "v2": e["v1"]})
-        man[oe["id"]] = recommend(ev, e["C"], e["hbr_km"], now, target_pc=config.PC_RED / 10)
+        prim_obj = catalog.objects[e["j"]] if e["swap"] else catalog.objects[e["i"]]
+        sec_obj = catalog.objects[e["i"]] if e["swap"] else catalog.objects[e["j"]]
+        man[oe["id"]] = recommend(ev, e["C"], e["hbr_km"], now, target_pc=config.PC_RED / 10,
+                                  fuel_ms=oe["primary_lifecycle"]["usable_dv_ms"],
+                                  secondary_maneuverable=sec_obj.obj_type == "PAYLOAD",
+                                  relax_pc=config.PC_RED / 2, age_days=oe["age_days"],
+                                  sk_ms_per_year=oe["primary_lifecycle"].get("sk_dv_ms_per_year"))
         if len(man) >= 25:
             break
+    # efficiency benchmark: with no maneuverable red alert, cost the highest-Pc maneuverable encounters
+    bench_dvs = []
+    if not man:
+        for oe, e in zip(out_events, events):
+            if not oe["maneuverable"] or oe["pc"] <= 0:
+                continue
+            ev = dict(e)
+            if e["swap"]:
+                ev.update({"r1": e["r2"], "v1": e["v2"], "r2": e["r1"], "v2": e["v1"]})
+            sec_obj = catalog.objects[e["i"]] if e["swap"] else catalog.objects[e["j"]]
+            # benchmark: cost of cutting each encounter's own Pc ten-fold (capped at the red-alert goal)
+            rb = recommend(ev, e["C"], e["hbr_km"], now, target_pc=min(config.PC_RED / 10, oe["pc"] / 10),
+                           fuel_ms=oe["primary_lifecycle"]["usable_dv_ms"],
+                           secondary_maneuverable=sec_obj.obj_type == "PAYLOAD",
+                           relax_pc=config.PC_RED / 2, age_days=oe["age_days"],
+                           sk_ms_per_year=oe["primary_lifecycle"].get("sk_dv_ms_per_year"))
+            if rb.get("best"):
+                bench_dvs.append(rb["best"]["dv_ms"])
+            if len(bench_dvs) >= 10:
+                break
     prog.lap("maneuvers")
+
+    # ---- what happens after the burn: new encounters on the way back, re-optimised against the fuel left
+    prog.step("re-encounter outlook after each maneuver", 60)
+    edges = apogee_perigee_pairs(catalog, thr)
+    for oe, e in zip(out_events, events):
+        m = man.get(oe["id"])
+        if m and m.get("best"):
+            try:
+                m["followup"] = followup(m, e, catalog, cov, edges, sw_by_date, thr)
+            except Exception as ex:
+                log.warning("follow-up outlook failed for conjunction %s: %s", oe["id"], ex)
+    prog.lap("followup")
 
     # ---- explainable alerts (XAI)
     prog.step("explaining alerts (driver attribution)", 61)
@@ -335,24 +376,6 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         oe["explanation"] = {k: v for k, v in ex.items() if k != "pc"}
         n_exp += 1
     prog.lap("explain")
-
-    # ---- ESA Kelvins CDM triage model (scored for every encounter; flagged when outside its training regime)
-    prog.step("CDM triage model (LightGBM, ESA Kelvins)", 62)
-    tri = triage_mod.load()
-    n_tri = 0
-    if tri is not None:
-        idx, rows, in_dom = [], [], []
-        for k, (oe, e) in enumerate(zip(out_events, events)):
-            a, b = catalog.objects[e["i"]], catalog.objects[e["j"]]
-            prim, sec = (b, a) if e["swap"] else (a, b)
-            if oe["pc"] > 0:
-                idx.append(k); in_dom.append(tri.in_domain(prim)); rows.append(tri.features(e, oe, prim, sec, e["swd"], e["pc_scale"]))
-        if rows:
-            cal, raw = tri.score(rows)
-            for k, p_cal, p_raw, ok in zip(idx, cal, raw, in_dom):
-                out_events[k]["triage"] = {"p_high_risk": float(p_cal), "p_raw": float(p_raw), "in_domain": bool(ok)}
-            n_tri = len(idx)
-    prog.lap("triage")
 
     # ---- forecast whether each encounter estimate will change at the next update
     prog.step("training update-change forecaster (Option C)", 62)
@@ -391,7 +414,6 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
 
     # ---- GNN pre-screener
     prog.step("graph-learning screener: training on previous 24 h", 64)
-    edges = apogee_perigee_pairs(catalog, thr)
     gnn = GNNScreener(seed=config.RANDOM_SEED)
     gnn_bench = {}
     try:
@@ -423,6 +445,12 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
     reentries = reentry_watchlist(catalog, now, dm, sw_today)
     prog.lap("reentry")
 
+    # ---- life-cycle of the whole fleet: who can still maneuver, who is debris in all but name
+    red_primaries = {oe["primary"] for oe in out_events if oe["risk"] == "red"}
+    life_fleet = lifecycle_fleet(catalog.objects, now, {r["norad"]: r.get("days_p50") for r in reentries
+                                                        if r.get("days_p50") is not None}, red_primaries)
+    prog.lap("lifecycle")
+
     # ---- validation: Iridium-Cosmos
     prog.step("historical validation: Iridium 33 / Cosmos 2251", 88)
     val = validate_iridium_cosmos(cov, dm, sw_by_date)
@@ -452,10 +480,19 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         "pc_brier_raw": calib["raw"]["brier"],
         "pc_brier_calibrated": calib["ai_calibrated"]["brier"],
         "pc_brier_skill_calibrated": calib["ai_calibrated"]["brier_skill_vs_climatology"],
-        "false_alert_rate": calib["ai_calibrated"]["false_alert_rate"],
-        "missed_detection_rate": calib["ai_calibrated"]["missed_detection_rate"],
+        "false_alert_rate": calib["ai_tuned"]["false_alert_rate"],
+        "false_alert_rate_policy": calib["ai_calibrated"]["false_alert_rate"],
+        "false_alert_rate_raw": calib["raw"]["false_alert_rate"],
+        "false_alert_rate_at_5pct_missed": calib["ai_at_5pct_missed"]["false_alert_rate"],
+        "accuracy_of_never_alerting": calib["accuracy_of_never_alerting"],
+        "alert_precision": calib["ai_tuned"]["alerts_that_were_collisions"],
+        "missed_detection_rate": calib["ai_tuned"]["missed_detection_rate"],
+        "missed_detection_rate_policy": calib["ai_calibrated"]["missed_detection_rate"],
+        "alert_threshold_tuned": calib["ai_tuned"]["alert_threshold"],
         "cdm_hit_rate": cdm_kpi.get("hit_rate"),
         "median_alert_lead_time_h": float(np.median([e["lead_time_h"] for e in reds + yellows])) if reds + yellows else None,
+        # no alerts: lead time at which the screening predicted the real (reference) CDM encounters
+        "median_cdm_lead_time_h": cdm_kpi.get("median_lead_time_h"),
         "prop_error_median_km": dict(zip(map(str, prop_before["horizons_days"]), prop_before["median_km"])),
         "covariance_nees_before": prop_before.get("median_nees"),
         "covariance_chi2_containment_before": prop_before.get("chi2_95_containment"),
@@ -464,6 +501,8 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         "screening_throughput_pairs_per_s": sstats["throughput_pairs_per_s"],
         "screening_time_s": sstats["search_s"] + sstats["refine_s"],
         "maneuver_mean_dv_ms": float(np.mean(dvs)) if dvs else None,
+        "maneuver_bench_dv_ms": float(np.mean(bench_dvs)) if bench_dvs else None,
+        "maneuver_bench_n": len(bench_dvs),
         "maneuver_dv_saving_vs_naive": float(np.mean(savings)) if savings else None,
         "catalog_objects": len(catalog),
         "update_latency_s": latency,
@@ -478,20 +517,20 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
     prog.step("saving results", 97)
     state = {
         "generated": now.isoformat(), "provenance": prov, "config": {
-            "horizon_h": horizon_h, "step_s": step_s, "threshold_km": thr, "pc_red": config.PC_RED, "miss_high_km": config.MISS_HIGH_KM,
+            "horizon_h": horizon_h, "step_s": step_s, "threshold_km": thr, "pc_red": config.PC_RED, "far_target": config.FAR_TARGET, "miss_high_km": config.MISS_HIGH_KM,
             "miss_medium_km": config.MISS_MEDIUM_KM, "miss_low_km": config.MISS_LOW_KM,
             "pc_yellow": config.PC_YELLOW},
         "space_weather": {"today": sw_today, "noaa_now": sw_now,
                           "series": [d for d in sw if d["date"] >= (now - timedelta(days=120)).date().isoformat()]},
         "summary": {"objects": len(catalog), "conjunctions": len(out_events), "red": len(reds),
                     "yellow": len(yellows), "reentries_30d": sum(1 for r in reentries if r.get("days_p50", 1e9) < 30),
-                    "anomalies": an_metrics.get("detections", 0), "debris_clouds": len(clouds)},
+                    "anomalies": an_metrics.get("detections", 0), "debris_clouds": len(clouds),
+                    "spent_satellites": life_fleet["spent_in_orbit"]},
         "screening": sstats, "conjunctions": out_events, "maneuvers": {str(k): v for k, v in man.items()},
         "density_model": {"metrics": dm.metrics, "profile": dm.profile(sw_today)},
         "propagation": {"before": prop_before, "after": prop_after, "realism": cov.realism},
         "change_forecast": fc.metrics,
-        "triage": {"benchmark": tri.benchmark if tri else None, "scored": n_tri,
-                   "domain": triage_mod.DOMAIN, "source": "ESA Kelvins CDM dataset (offline-trained LightGBM + isotonic)"}, "calibration": calib, "gnn": {"metrics": gnn.metrics, "benchmark": gnn_bench},
+        "calibration": calib, "lifecycle": life_fleet, "gnn": {"metrics": gnn.metrics, "benchmark": gnn_bench},
         "anomalies": {"events": anomalies[:60], "metrics": an_metrics, "clouds": clouds},
         "reentry": reentries, "validation": val, "cdm_comparison": cdm_kpi, "kpis": kpis,
         "timings_s": prog.timings,
@@ -504,6 +543,71 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
                      "events_raw": events, "cov_realism": cov.realism}, f)
     prog.step("done", 100)
     return state
+
+
+def followup(man, e, catalog, cov, edges, sw_by_date, thr, days=7.0):
+    """Encounters the maneuvered satellite faces after it is back on its slot.
+
+    The burn and the return to the slot are over at ``start``. From there the satellite is screened
+    for ``days`` more days; every new red encounter is re-optimised with only the propellant that
+    is left, so the chain shows when the usable fuel (above the disposal reserve) runs out.
+    """
+    pi = e["j"] if e["swap"] else e["i"]
+    best, fuel = man["best"], man["fuel"]
+    start = e["tca"] + timedelta(days=fuel["recovery_days"])
+    mine = edges[(edges[:, 0] == pi) | (edges[:, 1] == pi)]
+    evs, _ = screen_pairs(catalog, mine, start, days * 24.0, 30.0, thr)
+    left = fuel["remaining_after_ms"]
+    first_secondary = catalog.objects[e["i"] if e["swap"] else e["j"]].norad
+    rows, chain = [], []
+    for ev in sorted(evs, key=lambda x: x["tca"]):
+        if ev["rel_speed_kms"] < 1e-3:
+            continue
+        a, b = catalog.objects[ev["i"]], catalog.objects[ev["j"]]
+        swd = _sw_for(sw_by_date, ev["tca"])
+        age_a = (ev["tca"] - a.epoch).total_seconds() / 86400
+        age_b = (ev["tca"] - b.epoch).total_seconds() / 86400
+        Ca, _ = cov.cov_eci(a, ev["r1"], ev["v1"], age_a, swd)
+        Cb, _ = cov.cov_eci(b, ev["r2"], ev["v2"], age_b, swd)
+        C = Ca + Cb
+        hbr = max(a.est_radius_m() + b.est_radius_m(), 2.0) / 1000.0
+        pc, _ = pc_foster(ev["r2"] - ev["r1"], ev["v2"] - ev["v1"], C, hbr)
+        risk = "red" if pc >= config.PC_RED else "yellow" if pc >= config.PC_YELLOW else "green"
+        other = b if ev["i"] == pi else a
+        row = {"tca": ev["tca"].isoformat(), "days_after_return": (ev["tca"] - start).total_seconds() / 86400,
+               "secondary": other.norad, "secondary_name": other.name, "secondary_type": other.obj_type,
+               "same_object": other.norad == first_secondary,
+               "miss_km": ev["miss_km"], "pc": pc, "risk": risk, "action": None}
+        if risk == "red":
+            o = dict(ev)
+            if ev["i"] != pi:
+                o.update({"r1": ev["r2"], "v1": ev["v2"], "r2": ev["r1"], "v2": ev["v1"]})
+            m2 = recommend(o, C, hbr, start, target_pc=config.PC_RED / 10, fuel_ms=left,
+                           secondary_maneuverable=other.obj_type == "PAYLOAD", relax_pc=config.PC_RED / 2,
+                           age_days=max(abs(age_a), abs(age_b)))
+            b2 = m2.get("best")
+            if b2 and b2["total_dv_ms"] <= left:
+                row["action"] = {"status": m2["status"], "total_dv_ms": b2["total_dv_ms"], "fuel_before_ms": left,
+                                 "fuel_after_ms": left - b2["total_dv_ms"], "direction": b2["direction"],
+                                 "pc_after": b2["pc_after"]}
+                left -= b2["total_dv_ms"]
+            else:
+                row["action"] = {"status": "OUT_OF_FUEL", "total_dv_ms": b2["total_dv_ms"] if b2 else None,
+                                 "fuel_before_ms": left, "fuel_after_ms": left}
+            chain.append(row)
+        rows.append(row)
+    # a co-orbiting neighbour re-approaches every orbit: show each object once, at its worst pass
+    worst = {}
+    for r in rows:
+        k = r["secondary"]
+        if k not in worst or r["pc"] > worst[k]["pc"]:
+            worst[k] = r
+    rows = sorted(worst.values(), key=lambda r: -r["pc"])
+    return {"window_start": start.isoformat(), "window_days": days, "encounters": len(rows),
+            "red": sum(r["risk"] == "red" for r in rows), "yellow": sum(r["risk"] == "yellow" for r in rows),
+            "same_object_returns": sum(r["same_object"] for r in rows),
+            "fuel_after_first_ms": fuel["remaining_after_ms"], "fuel_after_all_ms": left,
+            "top": rows[:6], "chain": sorted(chain, key=lambda r: r["tca"])}
 
 
 def _clean(x):

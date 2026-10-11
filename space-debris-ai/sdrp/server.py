@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
-from .astro.pc import pc_foster
 from .astro.propagate import (Catalog, SpaceObject, dt_to_jd, ecef_to_geodetic, teme_to_ecef,
                               time_grid)
 from .astro.screening import screen_subset
@@ -189,11 +188,6 @@ def conjunction(cid: int, target_pc: float = Query(None)):
     e = S.events_raw[cid]
     C, hbr = np.asarray(e["C"]), e["hbr_km"]
     dr, dv = e["r2"] - e["r1"], e["v2"] - e["v1"]
-    # Pc sensitivity curves
-    hbrs = np.linspace(max(hbr * 0.2, 0.001), hbr * 4, 25)
-    pc_vs_hbr = [{"hbr_m": float(h * 1000), "pc": pc_foster(dr, dv, C, h)[0]} for h in hbrs]
-    scales = np.logspace(-1.3, 1.3, 27)
-    pc_vs_scale = [{"scale": float(k), "pc": pc_foster(dr, dv, C * k * k, hbr)[0]} for k in scales]
     # encounter-plane picture
     from .astro.pc import encounter_plane
     B = encounter_plane(dr, dv)
@@ -216,9 +210,12 @@ def conjunction(cid: int, target_pc: float = Query(None)):
         if e.get("swap"):
             ev.update({"r1": e["r2"], "v1": e["v2"], "r2": e["r1"], "v2": e["v1"]})
         man = recommend(ev, C, hbr, datetime.now(timezone.utc),
-                        target_pc=target_pc or min(config.PC_RED / 10, (c["pc"] or 1e-6) / 10))
-    return {"conjunction": c, "pc_vs_hbr": pc_vs_hbr, "pc_vs_cov_scale": pc_vs_scale,
-            "encounter_plane": plane, "range_timeline": {"t_s": ts.tolist(), "range_km": rng_km},
+                        target_pc=target_pc or min(config.PC_RED / 10, (c["pc"] or 1e-6) / 10),
+                        fuel_ms=(c.get("primary_lifecycle") or {}).get("usable_dv_ms"),
+                        secondary_maneuverable=c["secondary_type"] == "PAYLOAD",
+                        relax_pc=config.PC_RED / 2, age_days=c.get("age_days"),
+                        sk_ms_per_year=(c.get("primary_lifecycle") or {}).get("sk_dv_ms_per_year"))
+    return {"conjunction": c, "encounter_plane": plane, "range_timeline": {"t_s": ts.tolist(), "range_km": rng_km},
             "maneuver": man,
             "objects": {"primary": S.catalog.get(c["primary"]).summary(),
                         "secondary": S.catalog.get(c["secondary"]).summary()}}
@@ -264,9 +261,14 @@ def start(host="127.0.0.1", port=8000, initial_run=True, run_kwargs=None, refres
     if have:
         age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(S.state["generated"])).total_seconds() / 3600
         stale = age_h > 6
-    if initial_run and (not have or stale):
+    # saved results were produced in another data mode (e.g. live data shown after switching to offline)
+    want_mode = (run_kwargs or {}).get("mode") or config.DATA_MODE
+    saved_mode = (S.state.get("provenance") or {}).get("mode") if have else None
+    mode_changed = have and saved_mode != want_mode
+    if initial_run and (not have or stale or mode_changed):
         log.info("%s - starting the pipeline in the background",
-                 "Results are older than 6 h" if stale else "No previous results")
+                 f"Saved results used mode '{saved_mode}' but mode '{want_mode}' is requested" if mode_changed
+                 else "Results are older than 6 h" if stale else "No previous results")
         start_run(**(run_kwargs or {}))
     if refresh_hours and refresh_hours > 0:
         threading.Thread(target=_scheduler, args=(refresh_hours, run_kwargs), daemon=True).start()

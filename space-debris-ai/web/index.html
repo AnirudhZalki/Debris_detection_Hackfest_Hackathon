@@ -22,6 +22,7 @@
   <nav id="tabs">
     <button data-tab="overview" class="active">Overview</button>
     <button data-tab="conj">Conjunctions</button>
+    <button data-tab="life">Life cycle</button>
     <button data-tab="reentry">Re-entry</button>
     <button data-tab="weather">Space weather</button>
     <button data-tab="anom">Anomalies</button>
@@ -78,10 +79,31 @@
         </div>
       </div>
       <div class="tbl-wrap"><table id="conjTbl" class="tbl"><thead><tr>
-        <th>Pc risk</th><th>Miss class</th><th>Orbit</th><th>Primary</th><th>Secondary</th><th>TCA (UTC)</th><th>Miss</th><th>v<sub>rel</sub></th><th>Pc</th><th>Pc<sub>max</sub></th><th>Pc<sub>cal</sub></th><th>Next update</th></tr></thead><tbody></tbody></table></div>
+        <th>Pc risk</th><th>Miss class</th><th>Orbit</th><th>Primary</th><th>Secondary</th><th>TCA (UTC)</th><th>Miss</th><th>v<sub>rel</sub></th><th>Pc</th><th>Next update</th></tr></thead><tbody></tbody></table></div>
     </div>
     <div class="panel" id="conjDetail"><div class="empty">Select a conjunction to see the encounter geometry, Pc sensitivity and maneuver options.</div></div>
   </div>
+</section>
+
+<!-- LIFE CYCLE -->
+<section id="tab-life" class="tab">
+  <div class="panel">
+    <div class="panel-h"><span>From satellite to debris</span><span class="muted" id="lifeNote"></span></div>
+    <div class="stages">
+      <div class="live"><b>1 · Commissioning</b><span>First months. Full propellant, can maneuver.</span></div>
+      <div class="live"><b>2 · Operational</b><span>Station-keeping. Collision-avoidance burns come out of the propellant budget.</span></div>
+      <div class="mid"><b>3 · Late life</b><span>Over 60 % of design life used. Every burn is weighed against the disposal reserve.</span></div>
+      <div class="dead"><b>4 · End of life</b><span>Design life over or only the disposal reserve is left. It can no longer dodge: it is debris in all but name.</span></div>
+      <div class="dead"><b>5 · Disposal or derelict</b><span>A good end: de-orbit burn, or a graveyard orbit. A failed one stays in orbit as debris.</span></div>
+    </div>
+    <div class="cards" id="lifeCards"></div>
+  </div>
+  <div class="grid-2">
+    <div class="panel"><div class="panel-h"><span>Payloads by life-cycle stage</span></div><div class="chart-box"><canvas id="lifeChart"></canvas></div></div>
+    <div class="panel"><div class="panel-h"><span>Near or past end of life</span><span class="muted" id="lifeWatchNote"></span></div>
+      <div class="tbl-wrap" style="max-height:280px"><table id="lifeTbl" class="tbl"><thead><tr><th>Satellite</th><th>Orbit</th><th>Launched</th><th>Design life</th><th>End of life</th><th>Stage</th></tr></thead><tbody></tbody></table></div></div>
+  </div>
+  <div class="panel"><div class="panel-h"><span>Assumptions</span></div><div id="lifeAssume" class="note"></div></div>
 </section>
 
 <!-- RE-ENTRY -->
@@ -117,14 +139,15 @@
 <!-- KPI -->
 <section id="tab-kpi" class="tab">
   <div class="panel"><div class="panel-h"><span>Key performance indicators</span></div><div id="kpiTbl"></div></div>
-  <div class="panel" id="kpiExtra"></div>
-  <div class="grid-2">
-    <div class="panel"><div class="panel-h"><span>Propagation error vs horizon</span></div><div class="chart-box"><canvas id="propChart"></canvas></div></div>
-    <div class="panel"><div class="panel-h"><span>Covariance realism (95% containment)</span></div><div class="chart-box"><canvas id="nisChart"></canvas></div></div>
-  </div>
-  <div class="panel" id="triCard"></div>
-  <div class="panel" id="fcCard"></div>
-  <div class="panel" id="gnnCard"></div>
+  <details class="more"><summary>Model details</summary><div class="inner">
+    <div id="kpiExtra"></div>
+    <div class="grid-2">
+      <div class="panel"><div class="panel-h"><span>Propagation error vs horizon</span></div><div class="chart-box"><canvas id="propChart"></canvas></div></div>
+      <div class="panel"><div class="panel-h"><span>Covariance realism (95% containment)</span></div><div class="chart-box"><canvas id="nisChart"></canvas></div></div>
+    </div>
+    <div class="panel" id="fcCard"></div>
+    <div class="panel" id="gnnCard"></div>
+  </div></details>
 </section>
 
 <!-- CATALOG -->
@@ -132,7 +155,7 @@
   <div class="panel">
     <div class="panel-h"><span>Tracked objects</span>
       <div class="ctrls"><input id="cQ" placeholder="search name / NORAD"><select id="cType"><option value="">all types</option><option>PAYLOAD</option><option>ROCKET BODY</option><option>DEBRIS</option><option>UNKNOWN</option></select><select id="cReg"><option value="">all regimes</option><option>LEO</option><option>MEO</option><option>GEO</option><option>HEO</option></select></div></div>
-    <div class="tbl-wrap"><table id="catTbl" class="tbl"><thead><tr><th>NORAD</th><th>Name</th><th>Type</th><th>Regime</th><th>Perigee</th><th>Apogee</th><th>Inc</th><th>B*</th><th>A/m</th><th>Epoch</th><th></th></tr></thead><tbody></tbody></table></div>
+    <div class="tbl-wrap"><table id="catTbl" class="tbl"><thead><tr><th>NORAD</th><th>Name</th><th>Type</th><th>Regime</th><th>Perigee</th><th>Apogee</th><th>Inc</th><th></th></tr></thead><tbody></tbody></table></div>
     <div id="objDetail"></div>
   </div>
 </section>

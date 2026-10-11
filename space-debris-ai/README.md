@@ -64,7 +64,7 @@ API documentation (Swagger) is at **http://127.0.0.1:8000/docs**.
 
 | Problem-statement dataset | How the prototype uses it | Access |
 |---|---|---|
-| **CelesTrak** GP element sets (TLE) | Catalog: stations, Starlink, OneWeb, Iridium-NEXT, GPS, weather, last-30-days launches and the **Cosmos 2251, Iridium 33, Fengyun-1C, Cosmos 1408 debris clouds** | free, automatic |
+| **CelesTrak** GP element sets (TLE) | Catalog: stations, Starlink, OneWeb, Iridium-NEXT, GPS, weather and the **Cosmos 2251, Iridium 33, Fengyun-1C, Cosmos 1408 debris clouds** | free, automatic |
 | **CelesTrak SATCAT** | object type (payload / rocket body / debris) and **RCS** | free, automatic |
 | **Space-Track.org / 18th–19th SDS** | public **Conjunction Data Messages** (hit/miss KPI) and **60-day TLE history** (anomaly + propagation-error KPIs) | free account → `.env` |
 | **ESA DISCOS** | mass and cross-section (area-to-mass ratio for drag and casualty risk) | free token → `.env` |
@@ -105,7 +105,9 @@ To enable Space-Track and DISCOS, copy `.env.example` to `.env` and fill in the 
 | Conjunction alerting | red (Pc ≥ 1e-4) / yellow (Pc ≥ 1e-5) list, toast + browser notifications, `/api/alerts` | `server.py`, `web/app.js` |
 | Explainable alerts (XAI) | exact per-driver attribution in log10(Pc) (miss distance, radial separation, position uncertainty, drag uncertainty, TLE age, hard-body radius), counterfactual miss distance, and an `[ALERT]/[DRIVERS]/[DIAGNOSTIC]/[COUNTERFACTUAL]/[ACTION]` readout | `ai/explain.py` |
 | **Option C — forecast estimate changes** | at each orbital update, predicts whether the next update will move the miss distance by > max(200 m, 25 %) or the TCA by > 1 s. Gradient boosting on lagged update features; strict time-ordered split (train oldest 60 % of encounters, calibrate 20 %, test newest 20 %); compared with climatology and a calibrated physics heuristic. Trains on Space-Track `cdm_public` version histories when credentials are set, otherwise on physics-based simulated OD update sequences | `ai/forecast.py` |
-| Maneuver recommendation | Clohessy–Wiltshire search over burn time × direction, bisection on Δv to reach target Pc; reports **min Δv** and saving vs a late burn | `ops/maneuver.py` |
+| Maneuver recommendation | Clohessy–Wiltshire search over burn time × direction, bisection on Δv to reach target Pc; reports **min Δv**, the return-to-slot burn, a fuel-cost verdict and how many such burns the satellite can still afford | `ops/maneuver.py` |
+| **Satellite life cycle** | stage (commissioning → operational → late life → end of life → decaying) from launch year, design life and an assumed propellant budget. A satellite whose usable propellant is gone (design life over, or only the disposal reserve left) **cannot maneuver and is treated as debris** | `ops/lifecycle.py` |
+| **Re-encounter outlook** | after each avoidance burn the satellite is re-screened for 7 days; new red encounters are re-optimised with only the propellant left, until the usable fuel runs out | `pipeline.py` (`followup`) |
 | Re-entry risk | Monte-Carlo decay integration (AI density + F10.7 forecast + B* uncertainty) → re-entry window, latitude band, casualty expectation (NASA 1e-4 rule) | `ai/reentry.py` |
 
 ---
@@ -117,7 +119,7 @@ To enable Space-Track and DISCOS, copy `.env.example` to `.env` and fill in the 
 | Pc accuracy & calibration (**Brier score**) | encounter-population study; raw vs ML-calibrated Pc, reliability diagram, skill vs climatology |
 | Conjunction **hit/miss rate vs CDMs** and **lead time** | match screening events with Space-Track CDMs (or the injected ground-truth CDMs offline) by pair and TCA (±120 s); median lead time of alerts |
 | **Propagation position error** (km) at 1–7 days; **covariance realism** | TLE-vs-TLE residuals in RIC; χ² 95 % containment and median NEES before/after learned realism scaling |
-| **False-alert rate** and **screening throughput** (pairs/s) | false/missed alert rates at the red threshold; object-pair·time-steps per second of the all-vs-all search |
+| **False-alert rate** and **missed-collision rate** | tuned alert threshold on the encounter-population study; the trade-off curve and the effect of better tracking are shown on the Metrics tab. Plain accuracy is not reported because a system that never alerts scores ~96 % |
 | **Maneuver efficiency** (min Δv) | mean recommended Δv and saving vs a late radial burn |
 | **Catalog coverage** and **update latency** | objects screened; time to re-screen updated objects one-vs-all over the full horizon |
 | Extra AI KPIs | density-model error reduction, GNN recall / pairs pruned / speed-up, anomaly-detection F1, Option C AUC / Brier vs baselines |
@@ -137,12 +139,14 @@ anomaly F1 ≈0.9, min-Δv maneuvers ≈75 % cheaper than a late burn, and the r
    red/yellow dots are predicted conjunction points; double-click one to open it. Right: alert list
    and re-entries within 72 h.
 2. **Conjunctions** — sortable screening results. Selecting an event shows the encounter-plane
-   covariance ellipses vs the hard-body radius, range around TCA, Pc vs HBR, Pc vs covariance scale
-   (dilution region), a **“Why this alert?”** explanation panel, and the **recommended minimum-Δv maneuver** with alternatives.
+   covariance ellipses vs the hard-body radius, range around TCA, a **“Why this alert?”** explanation panel,
+   the **recommended minimum-Δv maneuver** with its fuel cost, and the **re-encounter outlook** (will it meet debris again, and can it still afford to dodge?).
+   A spent satellite shows why it cannot maneuver instead.
+2b. **Life cycle** — every payload by stage and orbit, and the satellites near or past end of life.
 3. **Re-entry** — P10–P90 re-entry windows and casualty expectation (red bars exceed 1e-4).
 4. **Drag & Space Weather** — F10.7/Ap drivers and the ML density correction with its uncertainty band.
 5. **Anomalies** — detected maneuvers/breakups and the fragmentation clouds found by DBSCAN.
-6. **KPIs & Validation** — every KPI above, charts, the Iridium–Cosmos case and the GNN benchmark.
+6. **Metrics** — the KPIs above, the false-alert explanation and charts; model internals are folded away under “Model details”.
 7. **Catalog** — search any object, show its orbit, or click **re-screen** to run an incremental
    one-vs-all screening (simulates a fresh observation arriving).
 
@@ -193,7 +197,7 @@ space-debris-ai/
 │   ├── data/   sources.py (CelesTrak, SATCAT, NOAA, Space-Track, DISCOS)  synthetic.py (offline data, TLE fitting, Iridium-Cosmos)
 │   ├── astro/  propagate.py screening.py pc.py covariance.py atmosphere.py
 │   ├── ai/     density.py gnn_screen.py anomaly.py calibration.py reentry.py explain.py forecast.py
-│   └── ops/    maneuver.py kpis.py
+│   └── ops/    maneuver.py lifecycle.py kpis.py
 ├── web/        index.html app.js styles.css vendor/ (three.js, Chart.js, satellite.js, Natural Earth – bundled, works offline)
 └── tests/      test_core.py
 ```
@@ -212,6 +216,12 @@ space-debris-ai/
 * The GNN uses fixed mean-aggregation message passing with a gradient-boosted edge readout so it runs
   on any laptop; replacing it with a trainable PyTorch-Geometric GraphSAGE/GAT only changes
   `ai/gnn_screen.py`.
+* **Fuel is an assumption.** Public catalogs do not publish propellant. The budget is a regime-level
+  total Δv scaled by how much of the design life has passed, minus a disposal reserve that is never
+  spent on avoidance. Put real figures in `data/fuel.json` (`{"<norad>": {"remaining_dv_ms": 12.5}}`).
+* **False alerts cannot reach zero with public tracking data.** Position errors of hundreds of metres to
+  kilometres are far larger than a satellite, so near misses and hits cannot always be told apart.
+  Better tracking, not a bigger model, is what lowers the rate (see the Metrics tab).
 * Maneuver planning uses linear (Clohessy–Wiltshire) relative motion; verify with high-fidelity
   propagation (Orekit / GMAT) before operational use.
 * Iridium–Cosmos validation uses a reconstruction of the public collision geometry with TLE-level

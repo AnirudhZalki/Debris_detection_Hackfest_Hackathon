@@ -115,3 +115,65 @@ def test_option_c_forecaster_beats_climatology_time_ordered():
     r = fc.score_current({"tau_days": 3.0, "miss_km": 0.3, "sigma_major_km": 2.0, "sigma_minor_km": 0.1, "pc": 1e-5,
                           "rel_speed_kms": 10.0})
     assert 0 <= r["p_change_next_update"] <= 1 and r["level"] in ("LOW", "MEDIUM", "HIGH")
+
+
+def _payload(line1):
+    return SpaceObject(norad=25544, name="TEST-SAT", line1=line1, line2=ISS[2], obj_type="PAYLOAD")
+
+
+def test_lifecycle_spent_satellite_cannot_maneuver_and_young_one_can():
+    from sdrp.ops.lifecycle import lifecycle
+    old = lifecycle(_payload(ISS[1]), NOW)                                    # launched 1998, design life 7 y
+    assert old["stage_key"] == "end of life" and not old["maneuverable"] and old["usable_dv_ms"] == 0.0
+    young_l1 = synthetic._with_launch_year(ISS[1], (2025, 2025), 25544)
+    young = lifecycle(_payload(young_l1), NOW)
+    assert young["maneuverable"] and young["usable_dv_ms"] > 0 and young["years_to_eol"] > 0
+    rb = SpaceObject(norad=1, name="R/B", line1=ISS[1], line2=ISS[2], obj_type="ROCKET BODY")
+    assert not lifecycle(rb, NOW)["maneuverable"]
+
+
+def test_lifecycle_reserve_is_never_spendable():
+    from sdrp.ops.lifecycle import lifecycle, REGIME
+    for yr in range(2018, 2027):
+        lc = lifecycle(_payload(synthetic._with_launch_year(ISS[1], (yr, yr), 25544)), NOW)
+        assert lc["remaining_dv_ms"] - lc["usable_dv_ms"] >= min(lc["reserve_dv_ms"], lc["remaining_dv_ms"]) - 1e-6
+        assert lc["usable_dv_ms"] <= REGIME[lc["regime"]][1]
+
+
+def test_synthetic_launch_year_keeps_a_valid_tle():
+    l1 = synthetic._with_launch_year(ISS[1], (2020, 2024), 12345)
+    assert len(l1) == 69 and int(l1[-1]) == synthetic._tle_checksum(l1)
+    assert 2020 <= 2000 + int(l1[9:11]) <= 2024
+
+
+def test_maneuver_respects_propellant_and_reports_cost():
+    from sdrp.ops.maneuver import recommend
+    from sdrp.astro.pc import pc_foster as pcf
+    objs, _ = synthetic.build_catalog(NOW, scale=0.15, n_injected=3)
+    cat = Catalog(objs)
+    events, _ = screen(cat, NOW, 24, 30, 5)
+    ev = min(events, key=lambda e: e["miss_km"])
+    C = np.diag([0.03, 0.05, 0.03])
+    pc0 = pcf(ev["r2"] - ev["r1"], ev["v2"] - ev["v1"], C, 0.02)[0]
+    assert pc0 > 0
+    rich = recommend(ev, C, 0.02, NOW, target_pc=pc0 / 10, fuel_ms=100.0, sk_ms_per_year=12.0)
+    assert rich["status"] == "RETURNS_TO_SLOT" and rich["fuel"]["verdict"] in ("WORTH_IT", "COSTLY", "VERY_COSTLY")
+    assert rich["fuel"]["maneuvers_affordable"] >= 1 and rich["fuel"]["station_keeping_days"] > 0
+    need = rich["best"]["total_dv_ms"]
+    poor = recommend(ev, C, 0.02, NOW, target_pc=pc0 / 10, fuel_ms=need * 0.5)
+    assert poor["status"] != "RETURNS_TO_SLOT"
+    empty = recommend(ev, C, 0.02, NOW, target_pc=pc0 / 10, fuel_ms=0.0)
+    assert empty["best"] is None and empty["status"] == "NOT_FEASIBLE"
+
+
+def test_alert_threshold_tuning_and_tracking_sweep():
+    from sdrp.ai.calibration import tune_threshold, run_study
+    rng = np.random.default_rng(0)
+    y = (rng.uniform(size=4000) < 0.05).astype(float)
+    p = np.clip(0.2 * y + rng.uniform(0, 0.6, 4000), 0, 1)
+    thr = tune_threshold(p, y, 0.10)
+    assert ((p >= thr) & (y == 0)).sum() / (y == 0).sum() <= 0.10
+    res, _ = run_study(1.0, n=1500, seed=1, sweep=False)
+    assert 0.9 < res["accuracy_of_never_alerting"] < 1.0                      # why plain accuracy misleads
+    good, _ = run_study(1.0, n=1500, seed=1, sigma_scale=0.1, sweep=False)
+    assert good["ai_at_5pct_missed"]["false_alert_rate"] < res["ai_at_5pct_missed"]["false_alert_rate"]
