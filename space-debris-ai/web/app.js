@@ -153,15 +153,15 @@ function renderTab(t) {
 // ------------------------------------------------------------------ conjunctions
 function renderConj() {
   const draw = () => {
-    const r = $("#fRisk").value, q = $("#fQ").value.toLowerCase();
-    const rows = APP.conj.filter(c => (!r || c.risk === r) && (!q || (c.primary_name + c.secondary_name + c.primary + " " + c.secondary).toLowerCase().includes(q))).slice(0, 600);
+    const r = $("#fRisk").value, mc = $("#fMiss").value, q = $("#fQ").value.toLowerCase();
+    const rows = APP.conj.filter(c => (!r || c.risk === r) && (!mc || c.miss_class === mc) && (!q || (c.primary_name + c.secondary_name + c.primary + " " + c.secondary).toLowerCase().includes(q))).slice(0, 600);
     $("#conjTbl tbody").innerHTML = rows.map(c => `<tr data-id="${c.id}">
-      <td><span class="pill ${c.risk}">${c.risk}</span></td><td>${esc(c.primary_name)}</td><td>${esc(c.secondary_name)}</td>
+      <td><span class="pill ${c.risk}">${c.risk}</span></td><td><span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green", NONE: "" })[c.miss_class]}">${c.miss_class === "NONE" ? "&gt; 4 km" : c.miss_class.toLowerCase()}</span></td><td>${c.regime}</td><td>${esc(c.primary_name)}</td><td>${esc(c.secondary_name)}</td>
       <td class="mono">${fmtT(c.tca)}</td><td class="num">${fmtKm(c.miss_km)}</td><td class="num">${c.rel_speed_kms.toFixed(1)}</td>
-      <td class="num">${fmtPc(c.pc)}</td><td class="num">${fmtPc(c.pc_max)}</td><td class="num">${fmtPc(c.pc_calibrated)}</td><td>${c.change_forecast ? `<span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green" })[c.change_forecast.level]}">${c.change_forecast.level === "HIGH" ? "will move" : c.change_forecast.level === "MEDIUM" ? "may move" : "stable"}</span>` : ""}</td></tr>`).join("");
+      <td class="num">${fmtPc(c.pc)}</td><td class="num">${fmtPc(c.pc_max)}</td><td class="num">${fmtPc(c.pc_calibrated)}</td><td class="num">${c.triage ? pct(c.triage.p_high_risk) : "—"}</td><td>${c.change_forecast ? `<span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green" })[c.change_forecast.level]}">${c.change_forecast.level === "HIGH" ? "will move" : c.change_forecast.level === "MEDIUM" ? "may move" : "stable"}</span>` : ""}</td></tr>`).join("");
     $$("#conjTbl tbody tr").forEach(tr => tr.onclick = () => openConj(+tr.dataset.id));
   };
-  $("#fRisk").onchange = draw; $("#fQ").oninput = draw; draw();
+  $("#fRisk").onchange = draw; $("#fMiss").onchange = draw; $("#fQ").oninput = draw; draw();
   if (APP.conj.length) openConj(APP.conj[0].id);
 }
 
@@ -183,6 +183,7 @@ async function openConj(id) {
       <div><b>${fmtPc(c.pc)}</b><span>Pc (Foster 2-D)</span></div>
       <div><b>${fmtPc(c.pc_max)}</b><span>Pc max (cov. scaling)</span></div>
       <div><b>${fmtPc(c.pc_calibrated)}</b><span>Pc AI-calibrated</span></div>
+      <div><b>${c.triage ? pct(c.triage.p_high_risk) : "n/a"}</b><span>${c.triage ? "triage: chance of high final risk" : "triage: outside model range"}</span></div>
       <div><b>${c.hbr_m.toFixed(1)} m</b><span>hard-body radius</span></div>
       <div><b>${(c.sigma_major_km * 1000).toFixed(0)} / ${(c.sigma_minor_km * 1000).toFixed(0)} m</b><span>σ encounter plane</span></div>
     </div>
@@ -338,26 +339,39 @@ async function renderAnom() {
 // ------------------------------------------------------------------ KPIs
 async function renderKpi() {
   const s = APP.summary, k = s.kpis;
-  const prop = await api("/api/state/propagation"), cal = await api("/api/state/calibration"), gnn = await api("/api/state/gnn");
+  const prop = await api("/api/state/propagation"), gnn = await api("/api/state/gnn"), tri = await api("/api/state/triage");
   const cls = (ok) => ok == null ? "" : ok ? "ok" : "warn";
+  const tb0 = tri.benchmark || {};
   const rows = [
-    ["Pc accuracy — Brier score (AI-calibrated / raw)", `${num(k.pc_brier_calibrated, 4)} / ${num(k.pc_brier_raw, 4)}`, "lower is better", `skill vs climatology ${num(k.pc_brier_skill_calibrated, 2)} · ${cal.n_test} encounters, ${cal.collisions_in_test} collisions (stress-test population)`, k.pc_brier_calibrated <= k.pc_brier_raw],
-    ["Conjunction hit rate vs CDMs", pct(k.cdm_hit_rate), "≥ 90 %", `${/synthetic/.test(s.provenance.cdm || "") ? "self-consistency vs injected truth · " : ""}${s.cdm_comparison.hits ?? 0}/${s.cdm_comparison.reference_cdms ?? 0} reference CDMs · median TCA error ${num(s.cdm_comparison.median_tca_error_s, 2)} s · miss error ${num(s.cdm_comparison.median_miss_distance_error_m, 1)} m`, k.cdm_hit_rate >= 0.9],
-    ["Alert lead time (median)", k.median_alert_lead_time_h != null ? num(k.median_alert_lead_time_h, 1) + " h" : "—", "≥ 6 h", `horizon ${s.config.horizon_h} h`, k.median_alert_lead_time_h >= 6],
-    ["Propagation error @1 / 3 / 7 d (median)", ["1", "3", "7"].map(d => num(k.prop_error_median_km[d], 2)).join(" / ") + " km", "TLE-class", "TLE-vs-TLE residuals, maneuvers excluded", true],
-    ["Covariance realism — χ² 95 % containment @7 d", `${pct(k.covariance_chi2_containment_after?.at(-1))} (was ${pct(k.covariance_chi2_containment_before?.at(-1))})`, "→ 95 %", `median NEES ${num(k.covariance_nees_after?.at(-1), 2)} (ideal 2.37), was ${num(k.covariance_nees_before?.at(-1), 2)}`, null],
-    ["False-alert rate @ Pc ≥ 1e-4 (stress test)", pct(k.false_alert_rate), "low", `missed-detection rate ${pct(k.missed_detection_rate)} (close-approach stress test)`, null],
-    ["Screening throughput", `${(k.screening_throughput_pairs_per_s / 1e6).toFixed(0)} M pair·steps/s`, "", `${s.screening.objects} objects × ${s.screening.time_steps} steps in ${num(k.screening_time_s, 1)} s · ${esc(s.screening.backend)}`, true],
-    ["Maneuver efficiency", k.maneuver_mean_dv_ms != null ? `${num(k.maneuver_mean_dv_ms, 3)} m/s mean Δv` : "no red alerts", "minimise Δv", k.maneuver_dv_saving_vs_naive != null ? `${pct(k.maneuver_dv_saving_vs_naive)} less Δv than a late radial burn` : "", true],
-    ["Catalog coverage", `${k.catalog_objects} objects`, "", esc(s.provenance.catalog), true],
-    ["Update latency after new TLEs", `${num(k.update_latency_s, 1)} s`, "< 60 s", "20 updated objects re-screened one-vs-all over the full horizon", k.update_latency_s < 60],
-    ["AI drag model — density error reduction", `${num(k.density_error_reduction_pct, 1)} %`, "", "vs static exponential atmosphere", true],
-    ["GNN screener — recall / pairs pruned", `${pct(k.gnn_recall)} / ${pct(k.gnn_pruned_fraction)}`, "recall ≥ 95 %", gnn.benchmark.speedup ? `${num(gnn.benchmark.speedup, 1)}× faster pairwise screening; MOID filter prunes only ${pct(gnn.metrics.test_moid_baseline_pruned_fraction_same_recall)} at same recall` : "", k.gnn_recall >= 0.95],
-    ["Anomaly detection F1", num(k.anomaly_f1, 2), "", "maneuvers & fragmentations (labelled)", k.anomaly_f1 > 0.8],
-    ["Update-change forecast — AUC", `${num(k.change_forecast_auc, 3)}`, "> physics baseline", `physics heuristic ${num(k.change_forecast_auc_physics, 3)} · Brier ${num(k.change_forecast_brier, 3)} · time-ordered test`, k.change_forecast_auc > k.change_forecast_auc_physics],
+    ["Pc estimation accuracy", tb0.accuracy != null ? pct(tb0.accuracy) : "—", "", null],
+    ["Pc calibration — Brier score", `${num(k.pc_brier_calibrated, 4)} (raw ${num(k.pc_brier_raw, 4)})`, "lower is better", k.pc_brier_calibrated <= k.pc_brier_raw],
+    ["Conjunction hit rate vs CDMs", pct(k.cdm_hit_rate), "≥ 90 %", k.cdm_hit_rate >= 0.9],
+    ["Conjunction miss rate vs CDMs", k.cdm_hit_rate != null ? pct(1 - k.cdm_hit_rate) : "—", "≤ 10 %", k.cdm_hit_rate >= 0.9],
+    ["Prediction lead time (median)", k.median_alert_lead_time_h != null ? num(k.median_alert_lead_time_h, 1) + " h" : "—", "≥ 6 h", k.median_alert_lead_time_h >= 6],
+    ["Propagation error @1 / 3 / 7 d (median)", ["1", "3", "7"].map(d => num(k.prop_error_median_km[d], 2)).join(" / ") + " km", "", null],
+    ["Covariance realism — χ² 95 % containment @7 d", pct(k.covariance_chi2_containment_after?.at(-1)), "→ 95 %", null],
+    ["False-alert rate", pct(k.false_alert_rate), "", null],
+    ["Screening throughput", `${(k.screening_throughput_pairs_per_s / 1e6).toFixed(0)} M pairs/s`, "", null],
+    ["Maneuver efficiency (mean Δv)", k.maneuver_mean_dv_ms != null ? `${num(k.maneuver_mean_dv_ms, 3)} m/s` : "no red alerts", "minimise", null],
+    ["Catalog coverage", `${k.catalog_objects} objects`, "", null],
+    ["Update latency after new observations", `${num(k.update_latency_s, 1)} s`, "< 60 s", k.update_latency_s < 60],
   ];
-  $("#kpiTbl").innerHTML = `<div class="kpi-row h"><div>KPI</div><div>Value</div><div>Target</div><div>Detail</div></div>` +
-    rows.map(r => `<div class="kpi-row"><div>${r[0]}</div><div class="v ${cls(r[4])}">${r[1]}</div><div class="muted">${r[2]}</div><div class="muted">${r[3]}</div></div>`).join("");
+  const extra = [
+    ["Conjunction hit-rate basis", `${/synthetic/.test(s.provenance.cdm || "") ? "self-consistency vs injected truth · " : ""}${s.cdm_comparison.hits ?? 0}/${s.cdm_comparison.reference_cdms ?? 0} reference CDMs · median TCA error ${num(s.cdm_comparison.median_tca_error_s, 2)} s · miss error ${num(s.cdm_comparison.median_miss_distance_error_m, 1)} m`],
+    ["Propagation error basis", "TLE-vs-TLE residuals, maneuvers excluded"],
+    ["Covariance realism (NEES)", `median ${num(k.covariance_nees_after?.at(-1), 2)} (ideal 2.37), was ${num(k.covariance_nees_before?.at(-1), 2)}; containment was ${pct(k.covariance_chi2_containment_before?.at(-1))}`],
+    ["Screening workload", `${s.screening.objects} objects × ${s.screening.time_steps} steps in ${num(k.screening_time_s, 1)} s · ${esc(s.screening.backend)}`],
+    ["Maneuver saving", k.maneuver_dv_saving_vs_naive != null ? `${pct(k.maneuver_dv_saving_vs_naive)} less Δv than a late radial burn` : "—"],
+    ["Catalog source", esc(s.provenance.catalog)],
+    ["AI drag model — density error reduction", `${num(k.density_error_reduction_pct, 1)} % vs static exponential atmosphere`],
+    ["GNN screener — recall / pairs pruned", `${pct(k.gnn_recall)} / ${pct(k.gnn_pruned_fraction)}${gnn.benchmark.speedup ? ` · ${num(gnn.benchmark.speedup, 1)}× faster pairwise screening` : ""}`],
+    ["Anomaly detection F1", num(k.anomaly_f1, 2)],
+    ["Update-change forecast — AUC", `${num(k.change_forecast_auc, 3)} (physics heuristic ${num(k.change_forecast_auc_physics, 3)}) · Brier ${num(k.change_forecast_brier, 3)}`],
+  ];
+  $("#kpiTbl").innerHTML = `<div class="kpi-row h"><div>KPI</div><div>Value</div><div>Target</div></div>` +
+    rows.map(r => `<div class="kpi-row"><div>${r[0]}</div><div class="v ${cls(r[3])}">${r[1]}</div><div class="muted">${r[2]}</div></div>`).join("");
+  $("#kpiExtra").innerHTML = `<div class="panel-h"><span>Additional model metrics &amp; notes</span></div>` +
+    extra.map(r => `<div class="kpi-row two"><div>${r[0]}</div><div class="muted">${r[1]}</div></div>`).join("");
   const b = prop.before, a = prop.after;
   mkChart("propChart", { type: "line", data: { labels: b.horizons_days.map(d => d + " d"), datasets: [
     { label: "median |Δr|", data: b.median_km, borderColor: "#4fd1c5" }, { label: "P90 |Δr|", data: b.p90_km, borderColor: "#ffb020" },
@@ -367,12 +381,14 @@ async function renderKpi() {
     { label: "physics covariance", data: b.chi2_95_containment.map(x => x * 100), backgroundColor: "#7f8ea3" },
     { label: "learned realism scaling", data: a.chi2_95_containment.map(x => x * 100), backgroundColor: "#4fd1c5" }] },
     options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 100, title: { display: true, text: "% inside χ² 95 % bound" } } } } });
-  const rel = cal.ai_calibrated.reliability, rr = cal.raw.reliability;
-  mkChart("relChart", { type: "scatter", data: { datasets: [
-    { label: "raw Pc", data: rr.map(x => ({ x: Math.max(x.mean_pred, 1e-7), y: Math.max(x.obs_freq, 1e-7) })), backgroundColor: "#7f8ea3", pointRadius: 5 },
-    { label: "AI-calibrated", data: rel.map(x => ({ x: Math.max(x.mean_pred, 1e-7), y: Math.max(x.obs_freq, 1e-7) })), backgroundColor: "#4fd1c5", pointRadius: 5 },
-    { label: "perfect", type: "line", data: [{ x: 1e-7, y: 1e-7 }, { x: 1, y: 1 }], borderColor: "#ffffff44", pointRadius: 0 }] },
-    options: { maintainAspectRatio: false, scales: { x: { type: "logarithmic", title: { display: true, text: "predicted Pc" } }, y: { type: "logarithmic", title: { display: true, text: "observed collision frequency" } } } } });
+  const tb = tri.benchmark || {};
+  $("#triCard").innerHTML = `<div class="panel-h"><span>CDM triage model</span><span class="muted">${esc(tri.source)}</span></div>
+    <div class="kv"><div><b>${tb.accuracy != null ? pct(tb.accuracy) : "—"}</b><span>accuracy (offline benchmark)</span></div>
+    <div><b>${tb.roc_auc != null ? num(tb.roc_auc, 3) : "—"}</b><span>ROC-AUC (offline benchmark)</span></div>
+    <div><b>${tb.brier_score_calibrated != null ? num(tb.brier_score_calibrated, 4) : "—"}</b><span>Brier score (baseline ${tb.brier_score_baseline != null ? num(tb.brier_score_baseline, 4) : "—"})</span></div>
+    <div><b>${tb.total_cdms != null ? tb.total_cdms.toLocaleString() : "—"}</b><span>training / test CDMs</span></div>
+    <div><b>${tri.scored}</b><span>live conjunctions scored</span></div></div>
+    <div class="note">Benchmark figures come from the ESA Kelvins CDM dataset, not from today's screening. The model only scores encounters where the primary is in a sun-synchronous orbit (inclination ${tri.domain.inc_deg.join("–")}°, altitude ${tri.domain.alt_km.join("–")} km). Its two strongest inputs are the Pc and its scale factor, so the near-perfect benchmark mostly reflects how well the Pc already predicts the final risk.</div>`;
   const fc = await api("/api/state/change_forecast");
   $("#fcCard").innerHTML = `<div class="panel-h"><span>Forecasting whether an encounter estimate will change at the next update</span><span class="muted">${esc(fc.source)} · ${fc.encounters.toLocaleString()} encounters · ${fc.updates.toLocaleString()} updates</span></div>
     <div class="grid-2"><div>
@@ -386,12 +402,6 @@ async function renderKpi() {
     { label: "physics AUC", data: fc.by_time_to_tca.map(b => b.auc_physics), backgroundColor: "#7f8ea3" },
     { label: "change rate", type: "line", data: fc.by_time_to_tca.map(b => b.change_rate), borderColor: "#ffb020", yAxisID: "y2" }] },
     options: { maintainAspectRatio: false, scales: { y: { min: 0.5, max: 1, title: { display: true, text: "ROC-AUC (test)" } }, y2: { position: "right", min: 0, max: 0.5, grid: { display: false }, title: { display: true, text: "share of updates that change" } } } } });
-  const v = s.validation;
-  $("#valCard").innerHTML = `<div class="panel-h"><span>Historical validation · Iridium 33 / Cosmos 2251</span><span class="pill ${v.would_alert_red ? "red" : "yellow"}">${v.would_alert_red ? "would alert red" : "below red"}</span></div>
-    <div class="kv"><div><b>${fmtKm(v.predicted_miss_km)}</b><span>predicted miss (TLE-level errors)</span></div><div><b>${num(v.rel_speed_kms, 2)} km/s</b><span>relative speed (actual ≈ 11.7)</span></div>
-    <div><b>${fmtPc(v.pc)}</b><span>Pc with AI covariance</span></div><div><b>${fmtPc(v.pc_max)}</b><span>Pc max</span></div>
-    <div><b>${num(v.tca_error_s, 2)} s</b><span>TCA error</span></div><div><b>${num(v.predicted_location?.lat, 1)}°N ${num(v.predicted_location?.lon, 1)}°E</b><span>predicted point (actual 72.5°N 97.9°E)</span></div></div>
-    <div class="note"><b>Outcome:</b> ${esc(v.actual_outcome)}. ${esc(v.historical_note)}<br>Data: ${esc(v.data)}.</div>`;
   const g = gnn.metrics, bm = gnn.benchmark;
   $("#gnnCard").innerHTML = `<div class="panel-h"><span>Graph-learning conjunction screener</span></div>
     <div class="kv"><div><b>${bm.all_vs_all_pairs?.toLocaleString() ?? "—"}</b><span>all-vs-all pairs</span></div><div><b>${bm.apogee_perigee_edges?.toLocaleString() ?? "—"}</b><span>graph edges (apogee/perigee filter)</span></div>
@@ -468,7 +478,7 @@ const GLOBE = (() => {
   const atmo = new THREE.Mesh(new THREE.SphereGeometry(1.015, 64, 48), new THREE.MeshBasicMaterial({ color: 0x4fd1c5, transparent: true, opacity: 0.06, side: THREE.BackSide }));
   scene.add(atmo);
   // objects
-  let sats = [], pts = null, posArr, colArr, tcaGroup = new THREE.Group(), orbitLine = null, selected = null;
+  let selIdx = -1, sats = [], pts = null, posArr, colArr, tcaGroup = new THREE.Group(), orbitLine = null, selected = null;
   earth.add(tcaGroup);
   const COL = { PAYLOAD: [0.345, 0.65, 1], "ROCKET BODY": [0.95, 0.76, 0.31], DEBRIS: [0.6, 0.64, 0.7], UNKNOWN: [0.6, 0.64, 0.7] };
   const pmat = new THREE.PointsMaterial({ size: 0.012, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.95 });
@@ -521,16 +531,47 @@ const GLOBE = (() => {
     orbitLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(arr), new THREE.LineBasicMaterial({ color: 0x4fd1c5 }));
     scene.add(orbitLine);
   }
+  let following = false, marker = null;
+  function clearSelection() {
+    following = false; selected = null;
+    if (orbitLine) { scene.remove(orbitLine); orbitLine = null; }
+    if (marker) { scene.remove(marker); marker = null; }
+    $("#selInfo").classList.add("hidden");
+  }
+  function returnToGlobe() {
+    clearSelection();
+    camera.position.set(1.9, 1.05, 2.45); controls.target.set(0, 0, 0);
+  }
   async function select(norad) {
-    const s = sats.find(x => x.norad === norad); if (!s) return;
-    selected = s; drawOrbit(s);
+    const idx = sats.findIndex(x => x.norad === norad); if (idx < 0) return;
+    const s = sats[idx];
+    selected = s; selIdx = idx; following = true; drawOrbit(s);
+    if (!marker) { marker = new THREE.Mesh(new THREE.SphereGeometry(0.02, 20, 14), new THREE.MeshBasicMaterial({ color: 0x4fd1c5 })); scene.add(marker); }
     const d = await api(`/api/object/${norad}`), o = d.summary;
+    if (selected !== s) return;
+    const cj = d.conjunctions, red = cj.filter(c => c.risk === "red"), yel = cj.filter(c => c.risk === "yellow");
+    const top = red[0] || yel[0];
+    const advice = red.length ? "Red conjunction: review the maneuver options for this object."
+      : yel.length ? "Monitor the predicted conjunctions; current alerts do not cross the red maneuver-review threshold."
+      : cj.length ? "All predicted conjunctions are low risk." : "No conjunctions inside the screening threshold.";
+    const re = d.reentry;
+    const reHtml = re && re.p50
+      ? `Predicted re-entry (median) <b>${fmtT(re.p50)}</b> UTC${re.p10 && re.p90 ? `<br><span class="muted">window ${fmtT(re.p10)} to ${fmtT(re.p90)}</span>` : ""}`
+      : "No re-entry forecast for this object in the active watchlist. This does not prove it cannot re-enter later.";
     const box = $("#selInfo"); box.classList.remove("hidden");
-    box.innerHTML = `<h4>${esc(o.name)} <span class="muted">${o.norad}</span></h4>
-      <div class="muted">${esc(o.type)} · ${o.regime} · ${o.perigee_km}×${o.apogee_km} km · i ${o.inc_deg}°</div>
-      <div class="muted">B* ${o.bstar.toExponential(2)} · A/m ${o.am_ratio} m²/kg · ~${o.mass_kg} kg</div>
-      <div style="margin-top:6px">${d.conjunctions.length} conjunctions${d.reentry && d.reentry.p50 ? ` · re-entry P50 ${fmtT(d.reentry.p50)}` : ""}${d.anomalies.length ? ` · ${d.anomalies.length} anomalies` : ""}</div>
-      <button class="btn sm" style="margin-top:6px" onclick="document.getElementById('selInfo').classList.add('hidden')">close</button>`;
+    box.innerHTML = `<div class="sel-top"><button class="btn sm" id="selReturn">Return to full globe</button><button class="sel-x" id="selClose" title="Close">×</button></div>
+      <h4>${esc(o.name)} <span class="muted">${o.norad}</span></h4>
+      <div class="muted">${esc(o.type)} · ${o.regime} · ${o.perigee_km} × ${o.apogee_km} km · inclination ${o.inc_deg}°</div>
+      <div class="muted">B* ${o.bstar.toExponential(2)} · A/m ${o.am_ratio} m²/kg · mass ${o.mass_kg} kg</div>
+      <div class="sel-sec"><div class="sel-h">Conjunctions</div>
+        <div>${cj.length} screened · ${red.length} red · ${yel.length} yellow</div>
+        <div class="${red.length ? "bad" : yel.length ? "warn" : "muted"}" style="margin:4px 0">${advice}</div>
+        ${top ? `<button class="btn sm sel-open" data-id="${top.id}">Open ${top.risk} conjunction · Pc ${fmtPc(top.pc)}</button>` : ""}</div>
+      <div class="sel-sec"><div class="sel-h">Re-entry</div><div>${reHtml}</div></div>
+      ${d.anomalies.length ? `<div class="sel-sec"><div class="sel-h">Anomalies</div><div>${d.anomalies.length} detected, latest: ${esc(d.anomalies[0].kind)} (${fmtT(d.anomalies[0].epoch).slice(0, 10)})</div></div>` : ""}
+      <div class="muted" style="margin-top:8px;font-size:11px">Following this object along its orbit. × or "Return to full globe" restores the full Earth view.</div>`;
+    $("#selReturn").onclick = returnToGlobe; $("#selClose").onclick = returnToGlobe;
+    const ob = $(".sel-open", box); if (ob) ob.onclick = () => { showTab("conj"); openConj(+ob.dataset.id); };
   }
   function focusConj(c) { select(c.primary); }
   function resize() { const w = el.clientWidth, h = el.clientHeight; if (!w) return; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
@@ -549,6 +590,13 @@ const GLOBE = (() => {
     const dt = t - last; last = t; simTime += dt * speed; acc += dt;
     if (acc > 90) { updatePositions(); acc = 0; }
     tcaGroup.children.forEach(m => m.scale.setScalar(1 + 0.35 * Math.sin(t / 250)));
+    if (selected && selIdx >= 0) {
+      const p = new THREE.Vector3(posArr[selIdx * 3], posArr[selIdx * 3 + 1], posArr[selIdx * 3 + 2]);
+      if (p.lengthSq() > 0) {
+        if (marker) marker.position.copy(p);
+        if (following) { const dist = Math.max(camera.position.length(), 1.8); camera.position.lerp(p.clone().normalize().multiplyScalar(dist), 0.06); }
+      }
+    }
     controls.update(); renderer.render(scene, camera);
   })(performance.now());
   return { setCatalog, select, focusConj, resize };

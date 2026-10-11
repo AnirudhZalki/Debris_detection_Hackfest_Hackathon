@@ -22,6 +22,7 @@ from .ai.density import DensityModel
 from .ai.explain import explain, typical_values
 from .ai.forecast import ChangeForecaster, drag_sensitivity, sequences_from_cdm_history, simulate_sequences
 from .ai.gnn_screen import GNNScreener
+from .ai import triage as triage_mod
 from .ai.reentry import reentry_watchlist
 from .astro.covariance import CovarianceModel
 from .astro.pc import pc_foster, pc_max
@@ -256,21 +257,25 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         hbr = max(a.est_radius_m() + b.est_radius_m(), 2.0) / 1000.0
         dr = e["r2"] - e["r1"]; dv = e["v2"] - e["v1"]
         pc, info = pc_foster(dr, dv, C, hbr)
-        pmax, _ = pc_max(dr, dv, C, hbr) if e["miss_km"] < 3 else (pc, 1)
+        pmax, pscale = pc_max(dr, dv, C, hbr) if e["miss_km"] < 3 else (pc, 1.0)
         pc_cal = float(iso.predict([pc], [max(abs(age_a), abs(age_b))], [info["sigma_major_km"]])[0]) if pc > 0 else 0.0
         jd, fr = dt_to_jd(e["tca"])
         lat, lon, alt = ecef_to_geodetic(teme_to_ecef(np.asarray(e["r1"])[None, :], np.array([jd + fr]))[0])
         risk = "red" if pc >= config.PC_RED else "yellow" if pc >= config.PC_YELLOW else "green"
+        m_km = e["miss_km"]
+        miss_class = ("HIGH" if m_km <= config.MISS_HIGH_KM else "MEDIUM" if m_km <= config.MISS_MEDIUM_KM
+                      else "LOW" if m_km <= config.MISS_LOW_KM else "NONE")
+        regime = "GEO" if abs(alt - 35786) < 1500 else "LEO" if alt < 2000 else "MEO/HEO"
         # primary = the maneuverable / larger object
         swap = (b.obj_type == "PAYLOAD" and a.obj_type != "PAYLOAD")
         p, s_ = (b, a) if swap else (a, b)
-        e.update({"C": C, "hbr_km": hbr, "swap": swap, "age_a": age_a, "age_b": age_b, "swd": swd})
+        e.update({"C": C, "pc_scale": float(pscale), "hbr_km": hbr, "swap": swap, "age_a": age_a, "age_b": age_b, "swd": swd})
         out_events.append({
             "id": k, "primary": p.norad, "primary_name": p.name, "primary_type": p.obj_type,
             "secondary": s_.norad, "secondary_name": s_.name, "secondary_type": s_.obj_type,
             "tca": e["tca"].isoformat(), "lead_time_h": (e["tca"] - now).total_seconds() / 3600,
             "miss_km": e["miss_km"], "miss_ric_km": e["miss_ric_km"], "rel_speed_kms": e["rel_speed_kms"],
-            "pc": pc, "pc_max": pmax, "pc_calibrated": pc_cal, "risk": risk, "hbr_m": hbr * 1000,
+            "pc": pc, "pc_max": pmax, "pc_calibrated": pc_cal, "risk": risk, "miss_class": miss_class, "regime": regime, "hbr_m": hbr * 1000,
             "sigma_primary_ric_km": (sb if swap else sa).tolist(),
             "sigma_secondary_ric_km": (sa if swap else sb).tolist(),
             "sigma_major_km": info["sigma_major_km"], "sigma_minor_km": info["sigma_minor_km"],
@@ -331,7 +336,25 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         n_exp += 1
     prog.lap("explain")
 
-    # ---- Option C: forecast whether each encounter estimate will change at the next update
+    # ---- ESA Kelvins CDM triage model (only for encounters inside its training regime)
+    prog.step("CDM triage model (LightGBM, ESA Kelvins)", 62)
+    tri = triage_mod.load()
+    n_tri = 0
+    if tri is not None:
+        idx, rows = [], []
+        for k, (oe, e) in enumerate(zip(out_events, events)):
+            a, b = catalog.objects[e["i"]], catalog.objects[e["j"]]
+            prim, sec = (b, a) if e["swap"] else (a, b)
+            if oe["pc"] > 0 and tri.in_domain(prim):
+                idx.append(k); rows.append(tri.features(e, oe, prim, sec, e["swd"], e["pc_scale"]))
+        if rows:
+            cal, raw = tri.score(rows)
+            for k, p_cal, p_raw in zip(idx, cal, raw):
+                out_events[k]["triage"] = {"p_high_risk": float(p_cal), "p_raw": float(p_raw)}
+            n_tri = len(idx)
+    prog.lap("triage")
+
+    # ---- forecast whether each encounter estimate will change at the next update
     prog.step("training update-change forecaster (Option C)", 62)
     seqs = []
     if st.enabled and mode != "offline":
@@ -455,7 +478,8 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
     prog.step("saving results", 97)
     state = {
         "generated": now.isoformat(), "provenance": prov, "config": {
-            "horizon_h": horizon_h, "step_s": step_s, "threshold_km": thr, "pc_red": config.PC_RED,
+            "horizon_h": horizon_h, "step_s": step_s, "threshold_km": thr, "pc_red": config.PC_RED, "miss_high_km": config.MISS_HIGH_KM,
+            "miss_medium_km": config.MISS_MEDIUM_KM, "miss_low_km": config.MISS_LOW_KM,
             "pc_yellow": config.PC_YELLOW},
         "space_weather": {"today": sw_today, "noaa_now": sw_now,
                           "series": [d for d in sw if d["date"] >= (now - timedelta(days=120)).date().isoformat()]},
@@ -465,7 +489,9 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         "screening": sstats, "conjunctions": out_events, "maneuvers": {str(k): v for k, v in man.items()},
         "density_model": {"metrics": dm.metrics, "profile": dm.profile(sw_today)},
         "propagation": {"before": prop_before, "after": prop_after, "realism": cov.realism},
-        "change_forecast": fc.metrics, "calibration": calib, "gnn": {"metrics": gnn.metrics, "benchmark": gnn_bench},
+        "change_forecast": fc.metrics,
+        "triage": {"benchmark": tri.benchmark if tri else None, "scored": n_tri,
+                   "domain": triage_mod.DOMAIN, "source": "ESA Kelvins CDM dataset (offline-trained LightGBM + isotonic)"}, "calibration": calib, "gnn": {"metrics": gnn.metrics, "benchmark": gnn_bench},
         "anomalies": {"events": anomalies[:60], "metrics": an_metrics, "clouds": clouds},
         "reentry": reentries, "validation": val, "cdm_comparison": cdm_kpi, "kpis": kpis,
         "timings_s": prog.timings,

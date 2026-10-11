@@ -1,0 +1,10 @@
+{
+  "accuracy": 0.9987,
+  "error_rate": 0.0013,
+  "brier_score_calibrated": 0.000828,
+  "brier_score_baseline": 0.058703,
+  "brier_error_reduction_pct": 98.59,
+  "roc_auc": 1.0,
+  "pr_auc": 0.9997,
+  "total_cdms": 162634
+}

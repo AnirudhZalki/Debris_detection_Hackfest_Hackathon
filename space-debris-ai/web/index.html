@@ -73,11 +73,12 @@
       <div class="panel-h"><span>Screening results</span>
         <div class="ctrls">
           <select id="fRisk"><option value="">all risks</option><option value="red">red</option><option value="yellow">yellow</option><option value="green">green</option></select>
+          <select id="fMiss"><option value="">all miss classes</option><option value="HIGH">high ≤ 0.5 km</option><option value="MEDIUM">medium ≤ 2 km</option><option value="LOW">low 2–4 km</option><option value="NONE">&gt; 4 km</option></select>
           <input id="fQ" placeholder="name / NORAD" size="12">
         </div>
       </div>
       <div class="tbl-wrap"><table id="conjTbl" class="tbl"><thead><tr>
-        <th>Risk</th><th>Primary</th><th>Secondary</th><th>TCA (UTC)</th><th>Miss</th><th>v<sub>rel</sub></th><th>Pc</th><th>Pc<sub>max</sub></th><th>Pc<sub>cal</sub></th><th>Next update</th></tr></thead><tbody></tbody></table></div>
+        <th>Pc risk</th><th>Miss class</th><th>Orbit</th><th>Primary</th><th>Secondary</th><th>TCA (UTC)</th><th>Miss</th><th>v<sub>rel</sub></th><th>Pc</th><th>Pc<sub>max</sub></th><th>Pc<sub>cal</sub></th><th>Triage</th><th>Next update</th></tr></thead><tbody></tbody></table></div>
     </div>
     <div class="panel" id="conjDetail"><div class="empty">Select a conjunction to see the encounter geometry, Pc sensitivity and maneuver options.</div></div>
   </div>
@@ -116,16 +117,14 @@
 <!-- KPI -->
 <section id="tab-kpi" class="tab">
   <div class="panel"><div class="panel-h"><span>Key performance indicators</span></div><div id="kpiTbl"></div></div>
-  <div class="grid-3">
+  <div class="panel" id="kpiExtra"></div>
+  <div class="grid-2">
     <div class="panel"><div class="panel-h"><span>Propagation error vs horizon</span></div><div class="chart-box"><canvas id="propChart"></canvas></div></div>
     <div class="panel"><div class="panel-h"><span>Covariance realism (95% containment)</span></div><div class="chart-box"><canvas id="nisChart"></canvas></div></div>
-    <div class="panel"><div class="panel-h"><span>Pc reliability</span></div><div class="chart-box"><canvas id="relChart"></canvas></div></div>
   </div>
+  <div class="panel" id="triCard"></div>
   <div class="panel" id="fcCard"></div>
-  <div class="grid-2">
-    <div class="panel" id="valCard"></div>
-    <div class="panel" id="gnnCard"></div>
-  </div>
+  <div class="panel" id="gnnCard"></div>
 </section>
 
 <!-- CATALOG -->

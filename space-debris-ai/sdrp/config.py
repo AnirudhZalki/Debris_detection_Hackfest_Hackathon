@@ -57,6 +57,10 @@ SCREEN_THRESHOLD_KM = _env("SDRP_THRESHOLD_KM", 10.0, float)  # report conjuncti
 HARD_BODY_RADIUS_M = _env("SDRP_HBR_M", 20.0, float)     # default combined hard-body radius
 PC_RED = _env("SDRP_PC_RED", 1e-4, float)                # maneuver threshold (NASA CARA red)
 PC_YELLOW = _env("SDRP_PC_YELLOW", 1e-5, float)
+# miss-distance risk tiers (km): HIGH <= 0.5, MEDIUM <= 2, LOW <= 4, anything farther is not classed
+MISS_HIGH_KM = _env("SDRP_MISS_HIGH_KM", 0.5, float)
+MISS_MEDIUM_KM = _env("SDRP_MISS_MEDIUM_KM", 2.0, float)
+MISS_LOW_KM = _env("SDRP_MISS_LOW_KM", 4.0, float)
 USE_GPU = _env("SDRP_USE_GPU", "auto")                    # auto|on|off (CuPy if available)
 
 RANDOM_SEED = _env("SDRP_SEED", 42, int)

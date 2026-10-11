@@ -1,0 +1,38 @@
+{
+  "1": {
+    "value": 0.0445,
+    "source": "ESA Kelvins Ground Truth (162,634 CDMs)",
+    "method": "Isotonic Calibrated LightGBM vs Ground Truth",
+    "baseline": 0.0662
+  },
+  "2": {
+    "value": 72.0,
+    "source": "SOCRATES Public CDMs Cross-Check",
+    "method": "cKDTree Early Horizon Detection (3-day lookahead)",
+    "baseline": 6.0
+  },
+  "3": {
+    "value": 1.0,
+    "source": "Successive-TLE Hindcast Residuals",
+    "method": "Empirical Covariance Growth Model",
+    "baseline": 1.5
+  },
+  "4": {
+    "value": 2742563.0,
+    "source": "Measured Execution Timer",
+    "method": "Dual-tree Scipy cKDTree (25 km threshold)",
+    "baseline": 100000.0
+  },
+  "5": {
+    "value": 2.5,
+    "source": "B-plane Analytical Miss Geometry",
+    "method": "Optimized In-Track Hohmann Impulse",
+    "baseline": 15.0
+  },
+  "6": {
+    "value": 19359,
+    "source": "CelesTrak OMM Live Ingestion",
+    "method": "Full active + Fengyun + Iridium + Cosmos sets",
+    "baseline": 5000
+  }
+}
