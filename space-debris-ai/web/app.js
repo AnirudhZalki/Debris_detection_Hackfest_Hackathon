@@ -98,6 +98,8 @@ function renderProv() {
   for (const [k, v] of Object.entries(p)) if (k !== "mode") items.push(`<span class="${syn(v) ? "syn" : ""}"><b>${esc(k)}</b> ${esc(v)}</span>`);
   items.push(`<span><b>run</b> ${fmtT(APP.summary.generated)} UTC · mode ${esc(p.mode)}</span>`);
   $("#prov").innerHTML = items.join("");
+  const keys = Object.keys(p).filter(k => k !== "mode"), nSyn = keys.filter(k => syn(p[k])).length;
+  $("#provSum").innerHTML = `Data sources <span class="${nSyn ? "syn" : "live"}">${nSyn ? `${nSyn} of ${keys.length} synthetic / offline` : "all live"}</span> · mode ${esc(p.mode)} · run ${fmtT(APP.summary.generated)} UTC`;
 }
 
 function renderCards() {
@@ -158,7 +160,7 @@ function renderConj() {
     $("#conjTbl tbody").innerHTML = rows.map(c => `<tr data-id="${c.id}">
       <td><span class="pill ${c.risk}">${c.risk}</span></td><td><span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green", NONE: "" })[c.miss_class]}">${c.miss_class === "NONE" ? "&gt; 4 km" : c.miss_class.toLowerCase()}</span></td><td>${c.regime}</td><td>${esc(c.primary_name)}</td><td>${esc(c.secondary_name)}</td>
       <td class="mono">${fmtT(c.tca)}</td><td class="num">${fmtKm(c.miss_km)}</td><td class="num">${c.rel_speed_kms.toFixed(1)}</td>
-      <td class="num">${fmtPc(c.pc)}</td><td class="num">${fmtPc(c.pc_max)}</td><td class="num">${fmtPc(c.pc_calibrated)}</td><td class="num">${c.triage ? pct(c.triage.p_high_risk) : "—"}</td><td>${c.change_forecast ? `<span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green" })[c.change_forecast.level]}">${c.change_forecast.level === "HIGH" ? "will move" : c.change_forecast.level === "MEDIUM" ? "may move" : "stable"}</span>` : ""}</td></tr>`).join("");
+      <td class="num">${fmtPc(c.pc)}</td><td class="num">${fmtPc(c.pc_max)}</td><td class="num">${fmtPc(c.pc_calibrated)}</td><td>${c.change_forecast ? `<span class="pill ${({ HIGH: "red", MEDIUM: "yellow", LOW: "green" })[c.change_forecast.level]}">${c.change_forecast.level === "HIGH" ? "will move" : c.change_forecast.level === "MEDIUM" ? "may move" : "stable"}</span>` : ""}</td></tr>`).join("");
     $$("#conjTbl tbody tr").forEach(tr => tr.onclick = () => openConj(+tr.dataset.id));
   };
   $("#fRisk").onchange = draw; $("#fMiss").onchange = draw; $("#fQ").oninput = draw; draw();
@@ -183,7 +185,6 @@ async function openConj(id) {
       <div><b>${fmtPc(c.pc)}</b><span>Pc (Foster 2-D)</span></div>
       <div><b>${fmtPc(c.pc_max)}</b><span>Pc max (cov. scaling)</span></div>
       <div><b>${fmtPc(c.pc_calibrated)}</b><span>Pc AI-calibrated</span></div>
-      <div><b>${c.triage ? pct(c.triage.p_high_risk) : "n/a"}</b><span>${c.triage ? "triage: chance of high final risk" : "triage: outside model range"}</span></div>
       <div><b>${c.hbr_m.toFixed(1)} m</b><span>hard-body radius</span></div>
       <div><b>${(c.sigma_major_km * 1000).toFixed(0)} / ${(c.sigma_minor_km * 1000).toFixed(0)} m</b><span>σ encounter plane</span></div>
     </div>

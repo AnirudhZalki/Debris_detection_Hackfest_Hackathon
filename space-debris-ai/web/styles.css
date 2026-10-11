@@ -129,3 +129,13 @@ canvas.plane{width:100%;height:260px;background:var(--inset);border:1px solid va
 :root[data-theme="light"] .progress .lbl{color:#fff}
 .theme-btn{background:none;border:1px solid var(--line2);color:var(--tx);border-radius:6px;padding:5px 10px;cursor:pointer;font:500 12px var(--sans)}
 .theme-btn:hover{background:var(--hov)}
+
+.provbox{border-bottom:1px solid var(--line);font-size:11.5px}
+.provbox summary{cursor:pointer;padding:5px 18px;color:var(--mut);list-style:none;user-select:none}
+.provbox summary::-webkit-details-marker{display:none}
+.provbox summary::before{content:"B8";display:inline-block;margin-right:6px}
+.provbox[open] summary::before{content:"BE"}
+.provbox summary .syn{color:#e8c56a}.provbox summary .live{color:#7ee2b4}
+.provbox .prov{border-bottom:0;padding-top:2px}
+:root[data-theme="light"] .provbox summary .syn{color:#8a5a00}
+:root[data-theme="light"] .provbox summary .live{color:#1a7f4b}

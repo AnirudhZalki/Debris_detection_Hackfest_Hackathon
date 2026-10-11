@@ -336,21 +336,21 @@ def run(mode=None, horizon_h=None, step_s=None, threshold_km=None, fast=False, p
         n_exp += 1
     prog.lap("explain")
 
-    # ---- ESA Kelvins CDM triage model (only for encounters inside its training regime)
+    # ---- ESA Kelvins CDM triage model (scored for every encounter; flagged when outside its training regime)
     prog.step("CDM triage model (LightGBM, ESA Kelvins)", 62)
     tri = triage_mod.load()
     n_tri = 0
     if tri is not None:
-        idx, rows = [], []
+        idx, rows, in_dom = [], [], []
         for k, (oe, e) in enumerate(zip(out_events, events)):
             a, b = catalog.objects[e["i"]], catalog.objects[e["j"]]
             prim, sec = (b, a) if e["swap"] else (a, b)
-            if oe["pc"] > 0 and tri.in_domain(prim):
-                idx.append(k); rows.append(tri.features(e, oe, prim, sec, e["swd"], e["pc_scale"]))
+            if oe["pc"] > 0:
+                idx.append(k); in_dom.append(tri.in_domain(prim)); rows.append(tri.features(e, oe, prim, sec, e["swd"], e["pc_scale"]))
         if rows:
             cal, raw = tri.score(rows)
-            for k, p_cal, p_raw in zip(idx, cal, raw):
-                out_events[k]["triage"] = {"p_high_risk": float(p_cal), "p_raw": float(p_raw)}
+            for k, p_cal, p_raw, ok in zip(idx, cal, raw, in_dom):
+                out_events[k]["triage"] = {"p_high_risk": float(p_cal), "p_raw": float(p_raw), "in_domain": bool(ok)}
             n_tri = len(idx)
     prog.lap("triage")
 
